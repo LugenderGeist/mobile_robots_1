@@ -1,16 +1,41 @@
-# This is a sample Python script.
+import sys
+import os
+from video import FieldRectifier
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+VIDEO_FILE = "video_1.mp4"
+OUTPUT_FILE = "rectified_video.mp4"
 
+FIELD_WIDTH = 10.0  # ← ИЗМЕНИТЕ
+FIELD_HEIGHT = 5.0  # ← ИЗМЕНИТЕ
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+CORNERS_FILE = "field_corners.json"
 
+def main():
+    print(f"\n📹 Обработка видео: {VIDEO_FILE}")
+    print(f"📏 Размеры поля: {FIELD_WIDTH} x {FIELD_HEIGHT}")
+    print(f"💾 Результат: {OUTPUT_FILE}\n")
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
+    if not os.path.exists(VIDEO_FILE):
+        print(f"❌ Ошибка: файл {VIDEO_FILE} не найден!")
+        sys.exit(1)
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    try:
+        rectifier = FieldRectifier(VIDEO_FILE, OUTPUT_FILE)
+        rectifier.set_field_dimensions(FIELD_WIDTH, FIELD_HEIGHT)
+
+        # Автоматически загружаем углы если есть
+        if os.path.exists(CORNERS_FILE):
+            print("📂 Загружаем сохранённые углы...")
+            rectifier.load_corners(CORNERS_FILE)
+
+        rectifier.process_video_to_video()
+        rectifier.save_corners(CORNERS_FILE)
+
+        print(f"\n✅ Готово! Результат: {OUTPUT_FILE}")
+
+    except Exception as e:
+        print(f"\n❌ Ошибка: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
