@@ -1,27 +1,99 @@
 import cv2
+import cv2.aruco as aruco
 import numpy as np
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, List
 import json
 
 
 class FieldRectifier:
+    """
+    Класс для выравнивания поля и обнаружения ОДНОГО робота по ArUco метке
+    С оптимизированными параметрами детектора для работы с искажёнными метками
+    """
 
     def __init__(self, video_path: str, output_path: str = "output_video.mp4"):
+        """
+        Инициализация
+        """
         self.video_path = video_path
         self.output_path = output_path
         self.field_width = None
         self.field_height = None
         self.corners = None
         self.H = None
-        self.output_size = (720, 720)  # ФИКСИРОВАННЫЙ РАЗМЕР 720x720
+        self.output_size = (720, 720)
+
+        # Настройки ArUco для 7x7 меток
+        self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_7X7_50)
+
+        # Оптимизированные параметры детектора для работы с искажёнными метками
+        self.aruco_params = aruco.DetectorParameters_create()
+        self._configure_detector_params()
+
+        # Хранение траектории
+        self.robot_trajectory = []
+
+    def _configure_detector_params(self):
+        """
+        Настройка параметров детектора ArUco для устойчивого распознавания
+        меток, расположенных под углом и с искажениями
+        """
+        # === Адаптивная пороговая обработка ===
+        # Увеличиваем диапазон размеров окна для адаптивной пороговой обработки
+        # Это помогает при неравномерном освещении
+        self.aruco_params.adaptiveThreshWinSizeMin = 3
+        self.aruco_params.adaptiveThreshWinSizeMax = 31
+        self.aruco_params.adaptiveThreshWinSizeStep = 4
+
+        # Константа, вычитаемая из среднего взвешенного (стандартное значение)
+        self.aruco_params.adaptiveThreshConstant = 7
+
+        # === Фильтрация кандидатов по размеру ===
+        # Минимальная длина периметра маркера (в пикселях)
+        # Уменьшаем, чтобы находить даже маленькие метки
+        self.aruco_params.minMarkerPerimeterRate = 0.01
+
+        # Максимальная длина периметра маркера
+        self.aruco_params.maxMarkerPerimeterRate = 0.8
+
+        # === Фильтрация по форме ===
+        # Минимальное расстояние между углами (отсеивает шумовые кандидаты)
+        self.aruco_params.minCornerDistanceRate = 0.05
+
+        # Минимальное расстояние между маркерами
+        self.aruco_params.minMarkerDistanceRate = 0.05
+
+        # === Параметры декодирования ===
+        # Количество битов в границе маркера (стандартно 1)
+        self.aruco_params.markerBorderBits = 1
+
+        # Коррекция ошибок при декодировании
+        # Увеличиваем для более толерантного распознавания искажённых меток
+        self.aruco_params.errorCorrectionRate = 0.8
+
+        # === Перспективные искажения ===
+        # Количество пикселей на ячейку при удалении перспективы
+        self.aruco_params.perspectiveRemovePixelPerCell = 4
+
+        # Допустимый зазор при удалении перспективы
+        self.aruco_params.perspectiveRemoveIgnoredMarginPerCell = 0.13
+
+        # === Уточнение углов ===
+        # Использовать уточнение углов (повышает точность)
+        self.aruco_params.cornerRefinementMethod = aruco.CORNER_REFINE_CONTOUR
+        self.aruco_params.cornerRefinementWinSize = 5
+        self.aruco_params.cornerRefinementMaxIterations = 30
+        self.aruco_params.cornerRefinementMinAccuracy = 0.05
 
     def set_field_dimensions(self, width: float, height: float):
+        """Задать реальные размеры поля"""
         self.field_width = width
         self.field_height = height
         print(f"✓ Размеры поля заданы: {width} x {height}")
 
     def set_corners_manually(self, frame: np.ndarray) -> np.ndarray:
+        """Интерактивный выбор углов поля"""
         corners = []
 
         # Масштабируем для удобного отображения
@@ -80,17 +152,19 @@ class FieldRectifier:
         return np.array(corners, dtype=np.float32)
 
     def compute_homography(self) -> np.ndarray:
+        """Вычислить матрицу гомографии для преобразования в 720x720"""
         if self.corners is None:
             raise ValueError("Не заданы углы поля")
 
         if self.field_width is None or self.field_height is None:
             raise ValueError("Не заданы реальные размеры поля")
 
+        # Целевые координаты - квадрат 720x720
         dst_corners = np.array([
-            [0, 0],  # левый верхний
-            [self.output_size[0], 0],  # правый верхний
-            [self.output_size[0], self.output_size[1]],  # правый нижний
-            [0, self.output_size[1]]  # левый нижний
+            [0, 0],
+            [self.output_size[0], 0],
+            [self.output_size[0], self.output_size[1]],
+            [0, self.output_size[1]]
         ], dtype=np.float32)
 
         # Вычисляем гомографию
@@ -101,7 +175,90 @@ class FieldRectifier:
 
         return self.H
 
-    def process_video_to_video(self, corners_file: Optional[str] = None) -> dict:
+    def detect_robot(self, frame: np.ndarray) -> Tuple[bool, int, Tuple[float, float], Tuple[float, float], np.ndarray]:
+        """
+        Обнаружить робота по ArUco метке на кадре
+
+        Returns:
+            found: найден ли робот
+            marker_id: ID метки (если найден)
+            center_pixel: координаты центра в пикселях выровненного изображения (x, y)
+            center_real: координаты центра в реальных единицах поля (x, y)
+            marker_corners: углы метки (для отрисовки)
+        """
+        # Преобразуем в оттенки серого
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Ищем метки
+        corners, ids, rejected = aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
+
+        # Если метка не найдена
+        if ids is None or len(ids) == 0:
+            return False, -1, (0, 0), (0, 0), None
+
+        # Берём первую найденную метку (у нас только одна)
+        marker_id = ids[0][0]
+        marker_corners = corners[0][0]
+
+        # Вычисляем центр метки в исходных координатах
+        center_x_orig = np.mean(marker_corners[:, 0])
+        center_y_orig = np.mean(marker_corners[:, 1])
+
+        # Преобразуем центр в выровненные координаты (вид сверху)
+        point_in_original = np.array([[[center_x_orig, center_y_orig]]], dtype=np.float32)
+        point_in_rectified = cv2.perspectiveTransform(point_in_original, self.H)
+
+        center_x_rect = point_in_rectified[0][0][0]
+        center_y_rect = point_in_rectified[0][0][1]
+
+        # Преобразуем в реальные координаты поля
+        scale_x = self.field_width / self.output_size[0]
+        scale_y = self.field_height / self.output_size[1]
+
+        real_x = center_x_rect * scale_x
+        real_y = center_y_rect * scale_y
+
+        return True, marker_id, (center_x_rect, center_y_rect), (real_x, real_y), marker_corners
+
+    def draw_robot(self, frame: np.ndarray, marker_id: int, center_pixel: Tuple[float, float],
+                   marker_corners: np.ndarray = None) -> np.ndarray:
+        """
+        Нарисовать робота на выровненном кадре
+
+        Args:
+            frame: выровненный кадр
+            marker_id: ID метки
+            center_pixel: координаты центра в пикселях
+            marker_corners: углы метки для рисования контура
+
+        Returns:
+            кадр с отрисованным роботом
+        """
+        x, y = int(center_pixel[0]), int(center_pixel[1])
+
+        # Если есть углы метки, рисуем зелёный контур
+        if marker_corners is not None:
+            corners_int = marker_corners.astype(np.int32)
+            cv2.polylines(frame, [corners_int], True, (0, 255, 0), 2)
+
+        # Рисуем красный круг в месте нахождения робота
+        cv2.circle(frame, (x, y), 15, (0, 0, 255), -1)
+        cv2.circle(frame, (x, y), 15, (255, 255, 255), 2)
+
+        # Добавляем текст с ID
+        cv2.putText(frame, f"Robot ID: {marker_id}", (x - 40, y - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+        # Рисуем крестик в центре
+        cv2.line(frame, (x - 8, y), (x + 8, y), (255, 255, 255), 2)
+        cv2.line(frame, (x, y - 8), (x, y + 8), (255, 255, 255), 2)
+
+        return frame
+
+    def process_video(self) -> Dict:
+        """
+        Обработка видео: выравнивание поля и отслеживание робота
+        """
         # Открываем видео
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
@@ -127,19 +284,23 @@ class FieldRectifier:
         # Вычисляем гомографию
         self.compute_homography()
 
+        # Создаём папку для выходного видео
+        Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
+
         # Создаём видео-запись
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(self.output_path, fourcc, fps, self.output_size)
 
         if not out.isOpened():
-            # Пробуем другой кодек
             fourcc = cv2.VideoWriter_fourcc(*'avc1')
             out = cv2.VideoWriter(self.output_path, fourcc, fps, self.output_size)
 
-        print(f"\n Обработка видео...")
+        print(f"\n🔄 Обработка видео и отслеживание робота...")
+        print("=" * 60)
 
         frame_count = 0
         processed_count = 0
+        self.robot_trajectory = []
 
         while True:
             ret, frame = cap.read()
@@ -148,40 +309,80 @@ class FieldRectifier:
 
             frame_count += 1
 
-            # Выравниваем кадр
+            # 1. Выравниваем поле
             rectified = cv2.warpPerspective(frame, self.H, self.output_size)
 
-            # Записываем в выходное видео
-            out.write(rectified)
+            # 2. Ищем робота на исходном кадре
+            found, robot_id, center_pixel, center_real, marker_corners = self.detect_robot(frame)
 
+            # 3. Если робот найден, рисуем его на выровненном кадре
+            if found:
+                rectified = self.draw_robot(rectified, robot_id, center_pixel, marker_corners)
+
+                # Сохраняем данные о позиции
+                self.robot_trajectory.append({
+                    'frame': frame_count,
+                    'x_pixel': center_pixel[0],
+                    'y_pixel': center_pixel[1],
+                    'x_real': center_real[0],
+                    'y_real': center_real[1]
+                })
+
+                # Выводим информацию в консоль (каждый 30-й кадр)
+                if frame_count % 30 == 0 or frame_count == 1:
+                    print(f"  Кадр {frame_count}: Робот ID={robot_id}, "
+                          f"позиция: ({center_real[0]:.2f}, {center_real[1]:.2f})")
+            else:
+                if frame_count % 100 == 0:
+                    print(f"  Кадр {frame_count}: Робот не обнаружен")
+
+            # 4. Записываем кадр в видео
+            out.write(rectified)
             processed_count += 1
 
-            # Показываем прогресс
+            # Прогресс
             if processed_count % 100 == 0:
                 percent = (processed_count / total_frames) * 100
-                print(f"  Обработано: {processed_count}/{total_frames} кадров ({percent:.1f}%)")
+                print(f"  Прогресс: {processed_count}/{total_frames} кадров ({percent:.1f}%)")
 
         # Закрываем всё
         cap.release()
         out.release()
 
+        print("=" * 60)
         print(f"\n✅ Обработка завершена!")
         print(f"  Обработано кадров: {processed_count}")
+        print(f"  Робот обнаружен в {len(self.robot_trajectory)} кадрах")
         print(f"  Результат сохранён: {self.output_path}")
 
-        # Проверяем размер файла
-        output_file = Path(self.output_path)
-        if output_file.exists():
-            size_mb = output_file.stat().st_size / (1024 * 1024)
-            print(f"  Размер файла: {size_mb:.1f} MB")
+        detection_rate = (len(self.robot_trajectory) / processed_count) * 100 if processed_count > 0 else 0
+        print(f"  Процент обнаружения: {detection_rate:.1f}%")
 
         return {
             'processed_frames': processed_count,
             'total_frames': total_frames,
             'fps': fps,
-            'output_size': self.output_size,
-            'output_path': self.output_path
+            'robot_detections': len(self.robot_trajectory),
+            'detection_rate': detection_rate,
+            'robot_trajectory': self.robot_trajectory
         }
+
+    def save_trajectory(self, output_file: str = "robot_trajectory.json"):
+        """Сохранить траекторию движения робота в JSON файл"""
+        if not self.robot_trajectory:
+            print("✗ Нет данных о траектории для сохранения")
+            return
+
+        data = {
+            'field_size': (self.field_width, self.field_height),
+            'video_file': self.video_path,
+            'total_detections': len(self.robot_trajectory),
+            'trajectory': self.robot_trajectory
+        }
+
+        with open(output_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"✓ Траектория сохранена в {output_file}")
 
     def save_corners(self, corners_file: str = "field_corners.json"):
         """Сохранить координаты углов"""
