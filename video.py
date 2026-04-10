@@ -4,7 +4,6 @@ import numpy as np
 from pathlib import Path
 import json
 
-
 class FieldRectifier:
     def __init__(self, video_path: str, output_path: str = "output_video.mp4"):
         self.video_path = video_path
@@ -167,6 +166,45 @@ class FieldRectifier:
 
         return frame
 
+    def draw_coordinate_axes(self, frame: np.ndarray, margin: int = 20, axis_length: int = 50) -> np.ndarray:
+        """
+        Нарисовать оси координат в правом верхнем углу кадра
+
+        Args:
+            frame: кадр
+            margin: отступ от краёв
+            axis_length: длина осей в пикселях
+        """
+        h, w = frame.shape[:2]
+
+        # Начало осей (правый верхний угол, с отступом)
+        origin_x = margin
+        origin_y = margin
+
+        # Ось X (красная) - вправо
+        x_end = (origin_x + axis_length, origin_y)
+        cv2.arrowedLine(frame, (origin_x, origin_y), x_end, (0, 0, 255), 2, tipLength=0.2)
+        cv2.putText(frame, "X", (x_end[0] + 5, x_end[1] - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+        # Ось Y (зелёная) - вниз
+        y_end = (origin_x, origin_y + axis_length)
+        cv2.arrowedLine(frame, (origin_x, origin_y), y_end, (0, 255, 0), 2, tipLength=0.2)
+        cv2.putText(frame, "Y", (y_end[0] + 5, y_end[1] + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+        # Точка начала координат
+        cv2.circle(frame, (origin_x, origin_y), 4, (255, 255, 255), -1)
+        cv2.putText(frame, "(0,0)", (origin_x - 30, origin_y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+        # Подписи границ (для понимания масштаба)
+        # Размер кадра
+        cv2.putText(frame, f"Size: {self.output_size[0]}x{self.output_size[1]}",
+                    (w - 150, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+
+        return frame
+
     def set_obstacle_params(self, edge_margin: int = 20,
                             robot_exclusion_radius: int = 60,
                             min_area: int = 500,
@@ -317,12 +355,17 @@ class FieldRectifier:
         out = cv2.VideoWriter(self.output_path, cv2.VideoWriter_fourcc(*'mp4v'),
                               fps, self.output_size)
 
-        print(f"\n🔄 Обработка...\n")
+        # СОЗДАЁМ ОКНО ДЛЯ ПРЕДПРОСМОТРА
+        cv2.namedWindow("Processing Preview", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Processing Preview", 800, 800)
+
+        print(f"\n🔄 Обработка... (окно предпросмотра открыто)")
+        print("   Нажмите 'q' во время обработки для досрочного выхода\n")
 
         frame_count = 0
         processed = 0
         self.robot_trajectory = []
-        all_obstacles = []  # для сохранения траекторий препятствий
+        all_obstacles = []
 
         while True:
             ret, frame = cap.read()
@@ -331,6 +374,9 @@ class FieldRectifier:
 
             frame_count += 1
             rectified = cv2.warpPerspective(frame, self.H, self.output_size)
+
+            # Рисуем оси координат
+            rectified = self.draw_coordinate_axes(rectified, margin=20, axis_length=60)
 
             # Детекция робота
             found, robot_id, center_pixel, center_real, marker_corners = self.detect_robot(frame)
@@ -345,9 +391,9 @@ class FieldRectifier:
             rectified = self.draw_obstacles(rectified, obstacles,
                                             robot_center=center_pixel if found else None,
                                             robot_radius=self.robot_exclusion_radius,
-                                            edge_margin=self.edge_margin)  # ← правильно
+                                            edge_margin=self.edge_margin)
 
-            # Сохраняем данные о препятствиях (опционально)
+            # Сохраняем данные
             if obstacles and frame_count % 30 == 0:
                 all_obstacles.append({
                     'frame': frame_count,
@@ -367,22 +413,36 @@ class FieldRectifier:
                     'y_real': center_real[1]
                 })
 
-                if frame_count % 50 == 0:
-                    print(f"  Кадр {frame_count}: Робот ID={robot_id}, "
-                          f"позиция: ({center_real[0]:.2f}, {center_real[1]:.2f}), "
-                          f"препятствий: {len(obstacles)}")
-            else:
-                if frame_count % 100 == 0:
-                    print(f"  Кадр {frame_count}: Робот не найден, препятствий: {len(obstacles)}")
+            # ПОКАЗЫВАЕМ ТЕКУЩИЙ КАДР В РЕАЛЬНОМ ВРЕМЕНИ
+            # Добавляем информацию о прогрессе
+            info_text = f"Frame: {frame_count}/{total_frames} | Robots: {1 if found else 0} | Obstacles: {len(obstacles)}"
+            cv2.putText(rectified, info_text, (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
+            cv2.imshow("Processing Preview", rectified)
+
+            # Записываем в выходное видео
             out.write(rectified)
             processed += 1
 
+            # Обработка клавиш для досрочного выхода
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print(f"\n⏹️ Обработка прервана пользователем на кадре {frame_count}")
+                break
+
+            # Прогресс в консоли
             if processed % 100 == 0:
                 print(f"  Прогресс: {processed}/{total_frames} ({processed * 100 / total_frames:.1f}%)")
 
+            if found and frame_count % 50 == 0:
+                print(f"  Кадр {frame_count}: Робот ID={robot_id}, "
+                      f"позиция: ({center_real[0]:.2f}, {center_real[1]:.2f}), "
+                      f"препятствий: {len(obstacles)}")
+
         cap.release()
         out.release()
+        cv2.destroyAllWindows()  # Закрываем окно предпросмотра
 
         print(f"\n✅ Обработка завершена!")
         print(f"   Обработано: {processed} кадров")
