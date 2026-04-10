@@ -1,13 +1,8 @@
-#!/usr/bin/env python3
-"""
-Программа для выравнивания поля и отслеживания робота по ArUco метке
-"""
-
 import os
 from pathlib import Path
 from video import FieldRectifier
 
-# ========== НАСТРОЙКИ (МЕНЯЙТЕ ЗДЕСЬ) ==========
+# ========== НАСТРОЙКИ ==========
 VIDEO_FILE = "video_4.mp4"
 OUTPUT_DIR = "output"
 OUTPUT_FILE = "rectified_video.mp4"
@@ -18,14 +13,13 @@ FIELD_WIDTH = 220.0  # ← ИЗМЕНИТЕ
 FIELD_HEIGHT = 220.0  # ← ИЗМЕНИТЕ
 
 # НАСТРОЙКИ ОБНАРУЖЕНИЯ ПРЕПЯТСТВИЙ
-EDGE_MARGIN = 5              # количество пикселей от края, которые закрашиваем белым
-ROBOT_EXCLUSION_RADIUS = 130  # радиус зоны вокруг робота, где не ищем препятствия (пиксели)
-OBSTACLE_MIN_AREA = 500  # минимальная площадь препятствия (пиксели)
-OBSTACLE_THRESHOLD_V = 208  # порог яркости для обнаружения тёмных объектов (0-255)
+EDGE_MARGIN = 10            # количество пикселей от края
+ROBOT_EXCLUSION_RADIUS = 125  # радиус зоны робота
+OBSTACLE_MIN_AREA = 500  # минимальная площадь препятствия
+OBSTACLE_THRESHOLD_V = 180  # порог яркости для обнаружения объектов
 
 CORNERS_FILE = "field_corners.json"
 FORCE_RESELECT = False
-
 
 # ===============================================
 
@@ -76,12 +70,9 @@ def main():
         rectifier.save_trajectory(os.path.join(OUTPUT_DIR, "robot_trajectory.json"))
 
         print(f"\n✅ Готово!")
-        print(f"   Видео: {OUTPUT_PATH}")
-        print(f"   Траектория: {OUTPUT_DIR}/robot_trajectory.json")
 
     except Exception as e:
         print(f"\n❌ Ошибка: {e}")
-
 
 if __name__ == "__main__":
     main()

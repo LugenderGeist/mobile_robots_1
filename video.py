@@ -115,9 +115,6 @@ class FieldRectifier:
         return False, -1, (0, 0), (0, 0), None
 
     def draw_axes_2d(self, frame: np.ndarray, marker_corners: np.ndarray, marker_id: int, axis_length: float = 60):
-        """
-        Нарисовать оси X и Y на ArUco метке (упрощённая версия)
-        """
         # Убеждаемся, что marker_corners имеет правильную форму
         if len(marker_corners.shape) == 3:
             marker_corners = marker_corners[0]
@@ -174,9 +171,7 @@ class FieldRectifier:
                             robot_exclusion_radius: int = 60,
                             min_area: int = 500,
                             threshold_v: int = 100):
-        """
-        Установить параметры обнаружения препятствий
-        """
+
         self.edge_margin = edge_margin
         self.robot_exclusion_radius = robot_exclusion_radius
         self.obstacle_min_area = min_area
@@ -188,39 +183,25 @@ class FieldRectifier:
         print(f"   Порог яркости: {threshold_v}")
 
     def detect_obstacles(self, frame: np.ndarray, robot_center: tuple = None) -> list:
-        """
-        Обнаружить препятствия на поле (тёмные объекты, независимо от цвета)
 
-        Args:
-            frame: исходный кадр (BGR)
-            robot_center: координаты центра робота в ВЫРОВНЕННЫХ пикселях (x, y)
-
-        Returns:
-            список препятствий с координатами в реальных единицах
-        """
-        # Используем параметры из self
-        margin_pixels = getattr(self, 'margin_pixels', 5)
+        edge_margin = getattr(self, 'edge_margin', 20)
         robot_exclusion_radius = getattr(self, 'robot_exclusion_radius', 60)
         min_area = getattr(self, 'obstacle_min_area', 500)
-        threshold_v = getattr(self, 'obstacle_threshold_v', 100)
 
-        # 1. Конвертируем в HSV
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        # 1. Конвертируем в оттенки серого
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 2. Извлекаем канал яркости (Value)
-        v_channel = hsv[:, :, 2]
+        # 2. Ищем всё, что темнее белого фона
+        threshold_white = getattr(self, 'obstacle_threshold_v', 220)
+        _, mask = cv2.threshold(gray, threshold_white, 255, cv2.THRESH_BINARY_INV)
 
-        # 3. Пороговая обработка по яркости
-        _, mask = cv2.threshold(v_channel, threshold_v, 255, cv2.THRESH_BINARY_INV)
-
-        # 4. Морфологические операции для очистки маски
+        # 3. Морфология
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        # 5. Если задан центр робота, "вырезаем" зону вокруг него из маски
-        if robot_center is not None:
-            # Преобразуем центр робота из выровненных координат в исходные
+        # 4. Исключаем зону робота
+        if robot_center is not None and hasattr(self, 'H_inv'):
             point_rect = np.array([[[robot_center[0], robot_center[1]]]], dtype=np.float32)
             point_orig = cv2.perspectiveTransform(point_rect, self.H_inv)
 
@@ -228,14 +209,11 @@ class FieldRectifier:
                 cx_orig = int(point_orig[0][0][0])
                 cy_orig = int(point_orig[0][0][1])
 
-                # Создаём маску для зоны робота в исходных координатах
                 robot_mask = np.zeros_like(mask)
                 cv2.circle(robot_mask, (cx_orig, cy_orig), robot_exclusion_radius, 255, -1)
-
-                # Убираем зону робота из маски препятствий
                 mask = cv2.bitwise_and(mask, cv2.bitwise_not(robot_mask))
 
-        # 6. Поиск контуров
+        # 5. Поиск контуров
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         obstacles = []
@@ -252,21 +230,18 @@ class FieldRectifier:
             else:
                 continue
 
-            # Преобразуем центр в выровненные координаты
             point = np.array([[[center_x_orig, center_y_orig]]], dtype=np.float32)
             point_rect = cv2.perspectiveTransform(point, self.H)
 
             center_x_rect = point_rect[0][0][0]
             center_y_rect = point_rect[0][0][1]
 
-            # Проверка отступа от края
-            if (center_x_rect < margin_pixels or
-                    center_x_rect > self.output_size[0] - margin_pixels or
-                    center_y_rect < margin_pixels or
-                    center_y_rect > self.output_size[1] - margin_pixels):
+            if (center_x_rect < edge_margin or
+                    center_x_rect > self.output_size[0] - edge_margin or
+                    center_y_rect < edge_margin or
+                    center_y_rect > self.output_size[1] - edge_margin):
                 continue
 
-            # Реальные координаты поля
             scale_x = self.field_width / self.output_size[0]
             scale_y = self.field_height / self.output_size[1]
 
@@ -284,9 +259,7 @@ class FieldRectifier:
 
     def draw_obstacles(self, frame: np.ndarray, obstacles: list, robot_center: tuple = None,
                        robot_radius: int = 50, edge_margin: int = 20) -> np.ndarray:
-        """
-        Нарисовать препятствия и жёлтую рамку (внутри которой ищем)
-        """
+
         h, w = frame.shape[:2]
 
         # 1. Рисуем жёлтую рамку (граница области поиска препятствий)
@@ -372,7 +345,7 @@ class FieldRectifier:
             rectified = self.draw_obstacles(rectified, obstacles,
                                             robot_center=center_pixel if found else None,
                                             robot_radius=self.robot_exclusion_radius,
-                                            edge_margin=self.edge_margin)
+                                            edge_margin=self.edge_margin)  # ← правильно
 
             # Сохраняем данные о препятствиях (опционально)
             if obstacles and frame_count % 30 == 0:
