@@ -6,10 +6,6 @@ import json
 
 
 class FieldRectifier:
-    """
-    Класс для выравнивания поля и обнаружения робота по ArUco метке
-    """
-
     def __init__(self, video_path: str, output_path: str = "output_video.mp4"):
         self.video_path = video_path
         self.output_path = output_path
@@ -19,7 +15,6 @@ class FieldRectifier:
         self.H = None
         self.output_size = (720, 720)
 
-        # ArUco для метки 6x6 (исправлено!)
         self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_6X6_250)
         self.aruco_params = aruco.DetectorParameters_create()
 
@@ -88,6 +83,9 @@ class FieldRectifier:
         ], dtype=np.float32)
 
         self.H, _ = cv2.findHomography(self.corners, dst_corners)
+        # Вычисляем обратную матрицу для преобразования из выровненных в исходные координаты
+        self.H_inv, _ = cv2.findHomography(dst_corners, self.corners)
+
         print(f"✓ Гомография вычислена, размер: {self.output_size[0]}x{self.output_size[1]}")
         return self.H
 
@@ -172,6 +170,156 @@ class FieldRectifier:
 
         return frame
 
+    def set_obstacle_params(self, edge_margin: int = 20,
+                            robot_exclusion_radius: int = 60,
+                            min_area: int = 500,
+                            threshold_v: int = 100):
+        """
+        Установить параметры обнаружения препятствий
+        """
+        self.edge_margin = edge_margin
+        self.robot_exclusion_radius = robot_exclusion_radius
+        self.obstacle_min_area = min_area
+        self.obstacle_threshold_v = threshold_v
+        print(f"✓ Параметры обнаружения препятствий:")
+        print(f"   Отступ от края (закрашивание): {edge_margin} px")
+        print(f"   Зона исключения робота: {robot_exclusion_radius} px")
+        print(f"   Мин. площадь: {min_area} px")
+        print(f"   Порог яркости: {threshold_v}")
+
+    def detect_obstacles(self, frame: np.ndarray, robot_center: tuple = None) -> list:
+        """
+        Обнаружить препятствия на поле (тёмные объекты, независимо от цвета)
+
+        Args:
+            frame: исходный кадр (BGR)
+            robot_center: координаты центра робота в ВЫРОВНЕННЫХ пикселях (x, y)
+
+        Returns:
+            список препятствий с координатами в реальных единицах
+        """
+        # Используем параметры из self
+        margin_pixels = getattr(self, 'margin_pixels', 5)
+        robot_exclusion_radius = getattr(self, 'robot_exclusion_radius', 60)
+        min_area = getattr(self, 'obstacle_min_area', 500)
+        threshold_v = getattr(self, 'obstacle_threshold_v', 100)
+
+        # 1. Конвертируем в HSV
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # 2. Извлекаем канал яркости (Value)
+        v_channel = hsv[:, :, 2]
+
+        # 3. Пороговая обработка по яркости
+        _, mask = cv2.threshold(v_channel, threshold_v, 255, cv2.THRESH_BINARY_INV)
+
+        # 4. Морфологические операции для очистки маски
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        # 5. Если задан центр робота, "вырезаем" зону вокруг него из маски
+        if robot_center is not None:
+            # Преобразуем центр робота из выровненных координат в исходные
+            point_rect = np.array([[[robot_center[0], robot_center[1]]]], dtype=np.float32)
+            point_orig = cv2.perspectiveTransform(point_rect, self.H_inv)
+
+            if point_orig is not None and len(point_orig) > 0:
+                cx_orig = int(point_orig[0][0][0])
+                cy_orig = int(point_orig[0][0][1])
+
+                # Создаём маску для зоны робота в исходных координатах
+                robot_mask = np.zeros_like(mask)
+                cv2.circle(robot_mask, (cx_orig, cy_orig), robot_exclusion_radius, 255, -1)
+
+                # Убираем зону робота из маски препятствий
+                mask = cv2.bitwise_and(mask, cv2.bitwise_not(robot_mask))
+
+        # 6. Поиск контуров
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        obstacles = []
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:
+                continue
+
+            M = cv2.moments(contour)
+            if M["m00"] != 0:
+                center_x_orig = M["m10"] / M["m00"]
+                center_y_orig = M["m01"] / M["m00"]
+            else:
+                continue
+
+            # Преобразуем центр в выровненные координаты
+            point = np.array([[[center_x_orig, center_y_orig]]], dtype=np.float32)
+            point_rect = cv2.perspectiveTransform(point, self.H)
+
+            center_x_rect = point_rect[0][0][0]
+            center_y_rect = point_rect[0][0][1]
+
+            # Проверка отступа от края
+            if (center_x_rect < margin_pixels or
+                    center_x_rect > self.output_size[0] - margin_pixels or
+                    center_y_rect < margin_pixels or
+                    center_y_rect > self.output_size[1] - margin_pixels):
+                continue
+
+            # Реальные координаты поля
+            scale_x = self.field_width / self.output_size[0]
+            scale_y = self.field_height / self.output_size[1]
+
+            real_x = center_x_rect * scale_x
+            real_y = center_y_rect * scale_y
+
+            obstacles.append({
+                'center_pixel': (center_x_rect, center_y_rect),
+                'center_real': (real_x, real_y),
+                'area': area,
+                'contour': contour
+            })
+
+        return obstacles
+
+    def draw_obstacles(self, frame: np.ndarray, obstacles: list, robot_center: tuple = None,
+                       robot_radius: int = 50, edge_margin: int = 20) -> np.ndarray:
+        """
+        Нарисовать препятствия и жёлтую рамку (внутри которой ищем)
+        """
+        h, w = frame.shape[:2]
+
+        # 1. Рисуем жёлтую рамку (граница области поиска препятствий)
+        cv2.rectangle(frame, (edge_margin, edge_margin),
+                      (w - edge_margin, h - edge_margin),
+                      (0, 255, 255), 2)  # жёлтая рамка
+
+        # 2. Рисуем зону вокруг робота (полупрозрачный серый круг)
+        if robot_center is not None:
+            cx, cy = int(robot_center[0]), int(robot_center[1])
+            overlay = frame.copy()
+            cv2.circle(overlay, (cx, cy), robot_radius, (100, 100, 100), -1)
+            cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+            cv2.circle(frame, (cx, cy), robot_radius, (200, 200, 200), 2)
+
+        # 3. Рисуем препятствия
+        for obs in obstacles:
+            cx = int(obs['center_pixel'][0])
+            cy = int(obs['center_pixel'][1])
+
+            radius = int(np.sqrt(obs['area'] / np.pi))
+            radius = max(radius, 10)
+
+            cv2.circle(frame, (cx, cy), radius, (255, 0, 0), 2)
+            cv2.line(frame, (cx - 10, cy), (cx + 10, cy), (0, 255, 255), 2)
+            cv2.line(frame, (cx, cy - 10), (cx, cy + 10), (0, 255, 255), 2)
+
+            cv2.putText(frame, f"({obs['center_real'][0]:.1f}, {obs['center_real'][1]:.1f})",
+                        (cx - 40, cy - radius - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+
+        return frame
+
     def process_video(self):
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
@@ -201,6 +349,7 @@ class FieldRectifier:
         frame_count = 0
         processed = 0
         self.robot_trajectory = []
+        all_obstacles = []  # для сохранения траекторий препятствий
 
         while True:
             ret, frame = cap.read()
@@ -209,7 +358,31 @@ class FieldRectifier:
 
             frame_count += 1
             rectified = cv2.warpPerspective(frame, self.H, self.output_size)
+
+            # Детекция робота
             found, robot_id, center_pixel, center_real, marker_corners = self.detect_robot(frame)
+
+            # Детекция препятствий
+            if found:
+                obstacles = self.detect_obstacles(frame, robot_center=center_pixel)
+            else:
+                obstacles = self.detect_obstacles(frame, robot_center=None)
+
+            # Отрисовка с рамкой
+            rectified = self.draw_obstacles(rectified, obstacles,
+                                            robot_center=center_pixel if found else None,
+                                            robot_radius=self.robot_exclusion_radius,
+                                            edge_margin=self.edge_margin)
+
+            # Сохраняем данные о препятствиях (опционально)
+            if obstacles and frame_count % 30 == 0:
+                all_obstacles.append({
+                    'frame': frame_count,
+                    'obstacles': [
+                        {'x': obs['center_real'][0], 'y': obs['center_real'][1],
+                         'area': obs['area']} for obs in obstacles
+                    ]
+                })
 
             if found:
                 rectified = self.draw_axes_2d(rectified, marker_corners, robot_id, axis_length=50)
@@ -223,10 +396,11 @@ class FieldRectifier:
 
                 if frame_count % 50 == 0:
                     print(f"  Кадр {frame_count}: Робот ID={robot_id}, "
-                          f"позиция: ({center_real[0]:.2f}, {center_real[1]:.2f})")
+                          f"позиция: ({center_real[0]:.2f}, {center_real[1]:.2f}), "
+                          f"препятствий: {len(obstacles)}")
             else:
                 if frame_count % 100 == 0:
-                    print(f"  Кадр {frame_count}: Робот не найден")
+                    print(f"  Кадр {frame_count}: Робот не найден, препятствий: {len(obstacles)}")
 
             out.write(rectified)
             processed += 1
@@ -239,14 +413,15 @@ class FieldRectifier:
 
         print(f"\n✅ Обработка завершена!")
         print(f"   Обработано: {processed} кадров")
-        print(f"   Обнаружений: {len(self.robot_trajectory)}")
+        print(f"   Обнаружений робота: {len(self.robot_trajectory)}")
         print(f"   Результат: {self.output_path}")
 
         return {
             'processed_frames': processed,
             'total_frames': total_frames,
             'fps': fps,
-            'robot_detections': len(self.robot_trajectory)
+            'robot_detections': len(self.robot_trajectory),
+            'obstacles_data': all_obstacles
         }
 
     def save_trajectory(self, output_file: str = "robot_trajectory.json"):
@@ -300,4 +475,14 @@ class FieldRectifier:
         except Exception as e:
             print(f"✗ Не удалось загрузить углы: {e}")
             return False
+
+    def save_obstacles_data(self, output_file: str = "obstacles_data.json"):
+        """Сохранить данные о препятствиях в JSON файл"""
+        if not hasattr(self, 'obstacles_data') or not self.obstacles_data:
+            print("✗ Нет данных о препятствиях для сохранения")
+            return
+
+        with open(output_file, 'w') as f:
+            json.dump(self.obstacles_data, f, indent=2)
+        print(f"✓ Данные о препятствиях сохранены в {output_file}")
 
