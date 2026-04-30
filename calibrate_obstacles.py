@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import json
 
-VIDEO_FILE = "video_4.mp4"
+VIDEO_FILE = "video_1.mp4"
 CORNERS_FILE = "field_corners.json"
 
 def nothing(x):
