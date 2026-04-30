@@ -4,6 +4,8 @@ import numpy as np
 from pathlib import Path
 import json
 
+from path_planner import PathPlanner
+
 class FieldRectifier:
     def __init__(self, video_path: str, output_path: str = "output_video.mp4"):
         self.safety_mask = None
@@ -205,48 +207,34 @@ class FieldRectifier:
         safety_margin = getattr(self, 'obstacle_safety_margin', 20)
         threshold_v = getattr(self, 'obstacle_threshold_v', 100)
 
-        # Переданный кадр уже выровнен
         gray = cv2.cvtColor(rectified_frame, cv2.COLOR_BGR2GRAY)
-
-        # Пороговая обработка
         _, mask = cv2.threshold(gray, threshold_v, 255, cv2.THRESH_BINARY_INV)
 
-        # Морфология
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        # Очищаем края
         h, w = mask.shape
         mask[0:edge_margin, :] = 0
         mask[h - edge_margin:h, :] = 0
         mask[:, 0:edge_margin] = 0
         mask[:, w - edge_margin:w] = 0
 
-        # Вырезаем зону робота
         if robot_center is not None:
             cx = int(robot_center[0])
             cy = int(robot_center[1])
             cv2.circle(mask, (cx, cy), robot_exclusion_radius, 0, -1)
-            cv2.circle(mask, (cx, cy), robot_exclusion_radius + 10, 0, -1)
 
-        # Поиск контуров
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        print(f"  Найдено контуров: {len(contours)}")
 
         obstacles = []
         safety_mask = np.zeros_like(mask)
 
         for contour in contours:
             area = cv2.contourArea(contour)
-            print(f"    Контур: area = {area} пикселей")
-
-            # Фильтрация по площади
             if area < min_area or area > max_area:
-                print(f"      → отброшен (min={min_area}, max={max_area})")
                 continue
 
-            # Центр препятствия
             center = cv2.moments(contour)
             if center["m00"] != 0:
                 center_x_rect = center["m10"] / center["m00"]
@@ -254,17 +242,16 @@ class FieldRectifier:
             else:
                 continue
 
-            # Вычисляем радиус в пикселях
-            radius = int(np.sqrt(area / np.pi))
+            # Радиус в ПИКСЕЛЯХ (для отрисовки)
+            radius_px = int(np.sqrt(area / np.pi))
 
-            # Безопасная зона
-            cv2.circle(safety_mask, (int(center_x_rect), int(center_y_rect)),
-                       radius + safety_margin, 255, -1)
-
-            # Реальные координаты (только для информации, не для фильтрации)
+            # Переводим радиус в САНТИМЕТРЫ (для планировщика)
             scale_x = self.field_width / self.output_size[0]
             scale_y = self.field_height / self.output_size[1]
+            scale_avg = (scale_x + scale_y) / 2
+            radius_cm = radius_px * scale_avg
 
+            # Реальные координаты центра в см
             real_x = center_x_rect * scale_x
             real_y = (self.output_size[1] - center_y_rect) * scale_y
 
@@ -272,10 +259,14 @@ class FieldRectifier:
                 'center_pixel': (center_x_rect, center_y_rect),
                 'center_real': (real_x, real_y),
                 'area': area,
-                'radius': radius,
-                'radius_with_safety': radius + safety_margin,
+                'radius_px': radius_px,  # ← для отрисовки
+                'radius_cm': radius_cm,  # ← для планировщика
                 'contour': contour
             })
+
+            # Безопасная зона для визуализации (можно удалить)
+            cv2.circle(safety_mask, (int(center_x_rect), int(center_y_rect)),
+                       radius_px, 255, -1)
 
         self.safety_mask = safety_mask
         return obstacles
@@ -306,6 +297,14 @@ class FieldRectifier:
 
         return frame
 
+    def set_path_params(self, path_safety_margin: float = 10.0, robot_radius: float = 15.0):
+        """Установить параметры планировщика пути"""
+        self.path_safety_margin = path_safety_margin
+        self.robot_radius = robot_radius
+        print(f"✓ Параметры планировщика пути:")
+        print(f"   Безопасный отступ от препятствий: {path_safety_margin} см")
+        print(f"   Радиус робота: {robot_radius} см")
+
     def process_video(self):
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
@@ -334,8 +333,11 @@ class FieldRectifier:
         cv2.resizeWindow("Processing Preview", 800, 800)
 
         # Переменные для хранения точки пользователя
-        user_point = None  # (x, y) в выровненных пикселях
-        user_point_real = None  # (x, y) в реальных координатах
+        user_point = None
+        user_point_real = None
+        current_robot_pos = None
+        self.path_planner = None
+        obstacles = []
 
         def mouse_callback(event, x, y, flags, param):
             nonlocal user_point, user_point_real
@@ -344,6 +346,7 @@ class FieldRectifier:
                 real_x, real_y = self.transform_coordinates(x, y)
                 user_point_real = (real_x, real_y)
                 print(f"📍 Точка: экран ({x}, {y}) → поле ({real_x:.1f}, {real_y:.1f})")
+                self.path_planner = None
 
         cv2.setMouseCallback("Processing Preview", mouse_callback)
 
@@ -365,13 +368,18 @@ class FieldRectifier:
                     break
                 frame_count += 1
 
+            # Выравниваем кадр
             rectified = cv2.warpPerspective(frame, self.H, self.output_size)
+
+            # Рисуем оси координат
             rectified = self.draw_coordinate_axes(rectified, margin=20, axis_length=60)
 
+            # Детекция робота
             found, robot_id, center_pixel, center_real, marker_corners = self.detect_robot(frame)
 
             if found:
                 robot_real_x, robot_real_y = self.transform_coordinates(center_pixel[0], center_pixel[1])
+                current_robot_pos = (robot_real_x, robot_real_y)
                 self.robot_trajectory.append({
                     'frame': frame_count,
                     'x_pixel': center_pixel[0],
@@ -380,52 +388,88 @@ class FieldRectifier:
                     'y_real': robot_real_y
                 })
 
+            # Детекция препятствий
             if found:
                 obstacles = self.detect_obstacles(rectified, robot_center=center_pixel)
             else:
                 obstacles = self.detect_obstacles(rectified, robot_center=None)
 
-            # Отрисовка препятствий
+            # === 1. РИСУЕМ КОНТУРЫ ПРЕПЯТСТВИЙ (синие круги) ===
             for obs in obstacles:
                 cx = int(obs['center_pixel'][0])
                 cy = int(obs['center_pixel'][1])
-                radius = obs['radius']
-                safety_radius = obs['radius_with_safety']
+                radius_px = obs['radius_px']
 
-                cv2.circle(rectified, (cx, cy), radius, (255, 0, 0), 2)
-                cv2.line(rectified, (cx - 10, cy), (cx + 10, cy), (255, 0, 0), 2)
-                cv2.line(rectified, (cx, cy - 10), (cx, cy + 10), (255, 0, 0), 2)
-                cv2.circle(rectified, (cx, cy), safety_radius, (0, 255, 0), 2)
+                # Контур препятствия (синий круг)
+                cv2.circle(rectified, (cx, cy), radius_px, (255, 0, 0), 2)
+                # Центр препятствия
+                cv2.line(rectified, (cx - 8, cy), (cx + 8, cy), (255, 0, 0), 2)
+                cv2.line(rectified, (cx, cy - 8), (cx, cy + 8), (255, 0, 0), 2)
 
-            # Отрисовка робота
+            # === 2. РИСУЕМ РОБОТА ===
             if found:
                 rectified = self.draw_axes_2d(rectified, marker_corners, robot_id, axis_length=50)
 
-            # Рисуем пользовательскую точку (фиолетовый круг)
+                # Контур зоны робота (серый круг - зона, где нет препятствий)
+                cx = int(center_pixel[0])
+                cy = int(center_pixel[1])
+                robot_zone_radius = self.robot_exclusion_radius
+                cv2.circle(rectified, (cx, cy), robot_zone_radius, (128, 128, 128), 1)
+
+            # === 3. РИСУЕМ ТОЧКУ ===
             if user_point is not None:
                 cv2.circle(rectified, user_point, 8, (255, 0, 255), -1)
                 cv2.circle(rectified, user_point, 12, (255, 0, 255), 2)
 
-            # ИНФОРМАЦИЯ В ЛЕВОМ ВЕРХНЕМ УГЛУ
+            # === 4. ПОСТРОЕНИЕ МАРШРУТА И КАРТЫ ПРЕПЯТСТВИЙ ===
+            if user_point_real is not None and found and current_robot_pos is not None:
+                if self.path_planner is None:
+                    from path_planner import PathPlanner
+                    path_safety_margin = getattr(self, 'path_safety_margin', 10.0)
+                    self.path_planner = PathPlanner(
+                        self.field_width,
+                        self.field_height,
+                        step=2.0,
+                        safety_margin=path_safety_margin
+                    )
+
+                self.path_planner.update_obstacles(obstacles)
+
+                # Карта препятствий (красные точки - контур безопасной зоны)
+                rectified = self.path_planner.visualize_obstacles_contours(rectified)
+
+                # Маршрут (жёлтая линия)
+                path = self.path_planner.find_path(current_robot_pos, user_point_real)
+                if path:
+                    rectified = self.path_planner.draw_path_on_frame(rectified, path, (0, 255, 255))
+                    if frame_count % 30 == 0:
+                        print(f"  Маршрут построен: {len(path)} точек")
+                else:
+                    if frame_count % 30 == 0:
+                        print(f"  ⚠️ Путь не найден!")
+
+            # === 5. ИНФОРМАЦИЯ В ЛЕВОМ ВЕРХНЕМ УГЛУ ===
             info_y = 25
             line_height = 25
 
-            # Строка 1: количество препятствий
             cv2.putText(rectified, f"Obstacles: {len(obstacles)}", (10, info_y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
             info_y += line_height
 
-            # Строка 2: координаты робота (если найден)
             if found:
                 cv2.putText(rectified, f"Robot: ({robot_real_x:.1f}, {robot_real_y:.1f})",
                             (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
                 info_y += line_height
+            else:
+                cv2.putText(rectified, "Robot: not found", (10, info_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                info_y += line_height
 
-            # Строка 3: координаты целевой точки (если поставлена)
             if user_point_real is not None:
                 cv2.putText(rectified, f"Target: ({user_point_real[0]:.1f}, {user_point_real[1]:.1f})",
                             (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
+            # Показываем и сохраняем
             cv2.imshow("Processing Preview", rectified)
             out.write(rectified)
             processed += 1
