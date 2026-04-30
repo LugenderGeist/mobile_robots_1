@@ -3,7 +3,7 @@ from pathlib import Path
 from video import FieldRectifier
 
 # ========== НАСТРОЙКИ ==========
-VIDEO_FILE = "video_4.mp4"
+VIDEO_FILE = "video_5.mp4"
 OUTPUT_DIR = "output"
 OUTPUT_FILE = "rectified_video.mp4"
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, OUTPUT_FILE)
@@ -13,13 +13,15 @@ FIELD_WIDTH = 220.0
 FIELD_HEIGHT = 220.0
 
 # НАСТРОЙКИ ОБНАРУЖЕНИЯ ПРЕПЯТСТВИЙ
-EDGE_MARGIN = 10
+EDGE_MARGIN = 0                     # не отсекаем объекты в detect_obstacles
 ROBOT_EXCLUSION_RADIUS = 100
-OBSTACLE_MIN_AREA = 500
-OBSTACLE_MAX_AREA = 50000
+OBSTACLE_MIN_AREA = 800
+OBSTACLE_MAX_AREA = 500000
 OBSTACLE_THRESHOLD_V = 220
 
-PATH_SAFETY_MARGIN = 20.0 # тут надо поковыряться
+# НАСТРОЙКИ ПЛАНИРОВЩИКА ПУТИ
+PATH_SAFETY_MARGIN = 10.0           # контур препятствия
+PATH_EDGE_MARGIN = 15.0             # отступ от края
 
 CORNERS_FILE = "field_corners.json"
 FORCE_RESELECT = False
@@ -50,7 +52,8 @@ def main():
         )
 
         rectifier.set_path_params(
-            path_safety_margin=PATH_SAFETY_MARGIN,
+            safety_margin=PATH_SAFETY_MARGIN,
+            edge_margin=PATH_EDGE_MARGIN
         )
 
         # Загружаем сохранённые углы
