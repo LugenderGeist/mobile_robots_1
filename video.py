@@ -297,12 +297,12 @@ class FieldRectifier:
 
         return frame
 
-    def set_path_params(self, safety_margin: float = 10.0, edge_margin: float = 30.0):
+    def set_path_params(self, robot_radius: float = 15.0, edge_margin: float = 30.0):
         """Установить параметры планировщика пути"""
-        self.path_safety_margin = safety_margin
+        self.robot_radius = robot_radius
         self.path_edge_margin = edge_margin
         print(f"✓ Параметры планировщика пути:")
-        print(f"   Безопасный отступ от препятствий: {safety_margin} см")
+        print(f"   Радиус робота: {robot_radius} см")
         print(f"   Отступ от края поля: {edge_margin} см")
 
     def process_video(self):
@@ -422,21 +422,20 @@ class FieldRectifier:
             if user_point_real is not None and found and current_robot_pos is not None:
                 if self.path_planner is None:
                     from path_planner import PathPlanner
+                    robot_radius = getattr(self, 'robot_radius', 15.0)
+                    edge_margin = getattr(self, 'path_edge_margin', 30.0)
                     self.path_planner = PathPlanner(
                         self.field_width,
                         self.field_height,
-                        step=3.0,
-                        safety_margin=getattr(self, 'path_safety_margin', 10.0),
-                        edge_margin=getattr(self, 'path_edge_margin', 30.0)
+                        step=2.0,
+                        robot_radius=robot_radius,
                     )
-                    print(
-                        f"  Создан PathPlanner: step=3.0, safety_margin={self.path_safety_margin}, edge_margin={self.path_edge_margin}")
 
-                # Обновляем карту препятствий
+                # Обновляем список препятствий в планировщике
                 self.path_planner.update_obstacles(obstacles)
 
-                # Визуализируем карту (серые края + красные контуры)
-                rectified = self.path_planner.visualize_obstacles_contours(rectified, obstacles)
+                # Визуализируем карту препятствий (только frame)
+                rectified = self.path_planner.visualize_obstacles_contours(rectified)
 
                 # Ищем путь
                 path = self.path_planner.find_path(current_robot_pos, user_point_real)
