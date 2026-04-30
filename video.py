@@ -182,21 +182,16 @@ class FieldRectifier:
         x_end = (cx + int(dx), cy + int(dy))
         cv2.arrowedLine(frame, (cx, cy), x_end, (0, 0, 255), 2, tipLength=0.3)
         cv2.putText(frame, "X", (x_end[0] + 5, x_end[1] - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
         # Рисуем ось Y (зелёная) - вверх (противоположно направлению)
         y_end = (cx - int(ux), cy - int(uy))
         cv2.arrowedLine(frame, (cx, cy), y_end, (0, 255, 0), 2, tipLength=0.3)
         cv2.putText(frame, "Y", (y_end[0] + 5, y_end[1] - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
-        # ID метки
-        cv2.putText(frame, f"ID:{marker_id}", (cx - 20, cy - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-        # Красный крестик
-        cv2.line(frame, (cx - 8, cy), (cx + 8, cy), (0, 0, 255), 2)
-        cv2.line(frame, (cx, cy - 8), (cx, cy + 8), (0, 0, 255), 2)
+        # Чёрная точка в центре (как в глобальной СК)
+        cv2.circle(frame, (cx, cy), 4, (0, 0, 0), -1)
 
         return frame
 
@@ -213,10 +208,14 @@ class FieldRectifier:
         # Ось X (красная) - вправо
         x_end = (origin_x + axis_length, origin_y)
         cv2.arrowedLine(frame, (origin_x, origin_y), x_end, (0, 0, 255), 2, tipLength=0.2)
+        cv2.putText(frame, "X", (x_end[0] + 5, x_end[1] - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
         # Ось Y (зелёная) - вверх
         y_end = (origin_x, origin_y - axis_length)
         cv2.arrowedLine(frame, (origin_x, origin_y), y_end, (0, 255, 0), 2, tipLength=0.2)
+        cv2.putText(frame, "Y", (y_end[0] + 5, y_end[1] - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
         # Точка начала координат
         cv2.circle(frame, (origin_x, origin_y), 4, (0, 0, 0), -1)
@@ -236,13 +235,6 @@ class FieldRectifier:
         self.obstacle_max_area = max_area
         self.obstacle_safety_margin = safety_margin  # ← ДОБАВИТЬ
         self.obstacle_threshold_v = threshold_v
-        print(f"✓ Параметры обнаружения препятствий:")
-        print(f"   Отступ от края: {edge_margin} px")
-        print(f"   Зона исключения робота: {robot_exclusion_radius} px")
-        print(f"   Мин. площадь: {min_area} px")
-        print(f"   Макс. площадь: {max_area} px")
-        print(f"   Безопасный отступ: {safety_margin} px")  # ← ДОБАВИТЬ
-        print(f"   Порог яркости: {threshold_v}")
 
     def detect_obstacles(self, frame: np.ndarray, robot_center: tuple = None) -> list:
 
@@ -257,8 +249,6 @@ class FieldRectifier:
         rectified = cv2.warpPerspective(frame, self.H, self.output_size)
 
         gray = cv2.cvtColor(rectified, cv2.COLOR_BGR2GRAY)
-
-        rectified = self.draw_coordinate_axes(rectified, margin=20, axis_length=60)
 
         # Пороговая обработка
         _, mask = cv2.threshold(gray, threshold_v, 255, cv2.THRESH_BINARY_INV)
@@ -347,7 +337,7 @@ class FieldRectifier:
         # 1. Рисуем жёлтую рамку
         cv2.rectangle(frame, (edge_margin, edge_margin),
                       (w - edge_margin, h - edge_margin),
-                      (0, 255, 255), 2)
+                      (0, 0, 0), 2)
 
         # 2. Рисуем зону вокруг робота
         if robot_center is not None:
@@ -368,9 +358,6 @@ class FieldRectifier:
 
             # Безопасная зона
             cv2.circle(frame, (cx, cy), safety_radius, (0, 255, 0), 2)
-
-            # крестик в центре
-
 
         return frame
 
@@ -463,20 +450,20 @@ class FieldRectifier:
             else:
                 obstacles = self.detect_obstacles(frame, robot_center=None)
 
-            # Отрисовка препятствий (только круги, без текста)
+            # Отрисовка препятствий
             for obs in obstacles:
                 cx = int(obs['center_pixel'][0])
                 cy = int(obs['center_pixel'][1])
                 radius = obs['radius']
                 safety_radius = obs['radius_with_safety']
 
-                # Синий круг (препятствие)
+                # Препятствие
                 cv2.circle(rectified, (cx, cy), radius, (255, 0, 0), 2)
+                cv2.line(rectified, (cx - 10, cy), (cx + 10, cy), (255, 0, 0), 2)
+                cv2.line(rectified, (cx, cy - 10), (cx, cy + 10), (255, 0, 0), 2)
+
                 # Зелёная безопасная зона
                 cv2.circle(rectified, (cx, cy), safety_radius, (0, 255, 0), 2)
-                # Жёлтый крестик в центре
-                cv2.line(rectified, (cx - 10, cy), (cx + 10, cy), (0, 255, 255), 2)
-                cv2.line(rectified, (cx, cy - 10), (cx, cy + 10), (0, 255, 255), 2)
 
             # Отрисовка робота (оси и крестик)
             if found:
@@ -484,8 +471,8 @@ class FieldRectifier:
 
             # Рисуем пользовательскую точку (фиолетовый круг)
             if user_point is not None:
-                cv2.circle(rectified, user_point, 8, (255, 0, 255), -1)
-                cv2.circle(rectified, user_point, 12, (255, 0, 255), 2)
+                cv2.circle(rectified, user_point, 8, (0, 0, 255), -1)
+                cv2.circle(rectified, user_point, 12, (0, 0, 255), 2)
 
             # === ИНФОРМАЦИЯ В ЛЕВОМ ВЕРХНЕМ УГЛУ ===
             info_y = 25
@@ -543,11 +530,6 @@ class FieldRectifier:
         out.release()
         cv2.destroyAllWindows()
 
-        print(f"\n✅ Обработка завершена!")
-        print(f"   Обработано: {processed} кадров")
-        print(f"   Обнаружений робота: {len(self.robot_trajectory)}")
-        print(f"   Результат: {self.output_path}")
-
         return {
             'processed_frames': processed,
             'total_frames': total_frames,
@@ -556,7 +538,6 @@ class FieldRectifier:
         }
 
     def save_trajectory(self, output_file: str = "robot_trajectory.json"):
-        """Сохранить траекторию движения робота в JSON файл"""
         if not self.robot_trajectory:
             print("✗ Нет данных о траектории для сохранения")
             return
