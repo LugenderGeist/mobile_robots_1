@@ -19,7 +19,7 @@ OBSTACLE_MIN_AREA = 500
 OBSTACLE_MAX_AREA = 50000
 OBSTACLE_THRESHOLD_V = 220
 
-PATH_SAFETY_MARGIN = 10.0
+PATH_SAFETY_MARGIN = 20.0 # тут надо поковыряться
 
 CORNERS_FILE = "field_corners.json"
 FORCE_RESELECT = False
@@ -27,9 +27,6 @@ FORCE_RESELECT = False
 # ===============================================
 
 def main():
-    print("=" * 50)
-    print("ОТСЛЕЖИВАНИЕ РОБОТА И ПРЕПЯТСТВИЙ НА ПОЛЕ")
-    print("=" * 50)
 
     # Проверяем видео
     if not os.path.exists(VIDEO_FILE):
@@ -38,9 +35,6 @@ def main():
 
     # Создаём папку для результатов
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-
-    print(f"\n📹 Видео: {VIDEO_FILE}")
-    print(f"📏 Размеры поля: {FIELD_WIDTH} x {FIELD_HEIGHT}")
 
     try:
         # Создаём обработчик
@@ -69,8 +63,6 @@ def main():
         # Сохраняем углы и траекторию
         rectifier.save_corners(CORNERS_FILE)
         rectifier.save_trajectory(os.path.join(OUTPUT_DIR, "robot_trajectory.json"))
-
-        print(f"\n✅ Готово!")
 
     except Exception as e:
         print(f"\n❌ Ошибка: {e}")

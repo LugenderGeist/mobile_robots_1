@@ -300,10 +300,6 @@ class FieldRectifier:
     def set_path_params(self, path_safety_margin: float = 10.0, robot_radius: float = 15.0):
         """Установить параметры планировщика пути"""
         self.path_safety_margin = path_safety_margin
-        self.robot_radius = robot_radius
-        print(f"✓ Параметры планировщика пути:")
-        print(f"   Безопасный отступ от препятствий: {path_safety_margin} см")
-        print(f"   Радиус робота: {robot_radius} см")
 
     def process_video(self):
         cap = cv2.VideoCapture(self.video_path)

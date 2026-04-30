@@ -14,7 +14,6 @@ class PathPlanner:
         self.path = []
 
     def update_obstacles(self, obstacles: List[dict]):
-        """Обновить карту препятствий"""
         self.obstacle_map.fill(0)
 
         for obs in obstacles:
@@ -35,7 +34,6 @@ class PathPlanner:
                             self.obstacle_map[grid_y, grid_x] = 1
 
     def visualize_obstacles_contours(self, frame: np.ndarray) -> np.ndarray:
-        """Нарисовать контуры препятствий на основе карты (только границы)"""
         h, w = frame.shape[:2]
 
         # Находим контуры на карте препятствий
@@ -57,14 +55,12 @@ class PathPlanner:
 
             if len(pixel_contour) > 2:
                 pixel_contour = np.array(pixel_contour, dtype=np.int32)
-                # Рисуем контур красным цветом
                 cv2.polylines(frame, [pixel_contour], True, (0, 0, 255), 2)
 
         return frame
 
     def find_path(self, start: Tuple[float, float], goal: Tuple[float, float], robot_radius: float = 15.0) -> List[
         Tuple[float, float]]:
-        """Поиск пути BFS с учётом радиуса робота"""
         start_x = int(start[0] / self.step)
         start_y = int(start[1] / self.step)
 
@@ -83,11 +79,6 @@ class PathPlanner:
         if self.obstacle_map[goal_y, goal_x] == 1:
             print(f"  Цель в препятствии!")
             return []
-
-        # ВРЕМЕННО УБИРАЕМ ПРОВЕРКУ СТАРТА, так как робот может быть рядом с препятствием
-        # Просто выводим предупреждение, но не прерываем поиск
-        if self.obstacle_map[start_y, start_x] == 1:
-            print(f"  ⚠️ Предупреждение: старт в зоне препятствия, но продолжаем поиск...")
 
         # Разрешаем движение в 8 направлениях
         moves = [(-1, -1), (-1, 0), (-1, 1),
@@ -132,7 +123,6 @@ class PathPlanner:
         return []
 
     def calculate_path_length(self, path: List[Tuple[float, float]]) -> float:
-        """Вычислить длину пути в сантиметрах"""
         if len(path) < 2:
             return 0.0
         total = 0.0
@@ -143,7 +133,6 @@ class PathPlanner:
         return total
 
     def simplify_path(self, path: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-        """Упростить путь (убрать лишние точки на прямой)"""
         if len(path) <= 2:
             return path
 
@@ -175,7 +164,6 @@ class PathPlanner:
 
     def draw_path_on_frame(self, frame: np.ndarray, path: List[Tuple[float, float]],
                            color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
-        """Нарисовать путь на кадре"""
         if not path or len(path) < 2:
             return frame
 
@@ -197,7 +185,6 @@ class PathPlanner:
         return frame
 
     def visualize_map(self, frame: np.ndarray, start: Tuple[float, float], goal: Tuple[float, float]) -> np.ndarray:
-        """Визуализировать карту препятствий на кадре (для отладки)"""
         h, w = frame.shape[:2]
         for gy in range(self.grid_height):
             for gx in range(self.grid_width):
