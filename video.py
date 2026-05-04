@@ -9,7 +9,6 @@ from path_planner import PathPlanner
 class FieldRectifier:
     def __init__(self, video_path: str, output_path: str = "output_video.mp4"):
         self.safety_mask = None
-        self.robot_exclusion_radius = None
         self.obstacle_threshold_v = None
         self.obstacle_safety_margin = None
         self.obstacle_max_area = None
@@ -60,15 +59,15 @@ class FieldRectifier:
                 print(f"  Точка {len(corners)}: ({orig_x}, {orig_y})")
 
                 if len(corners) == 4:
-                    print("\n✅ Выбраны все 4 угла! Нажмите 'q'")
+                    print("\n Выбраны все 4 угла! Нажмите 'q'")
 
         cv2.namedWindow("Select corners", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Select corners", 1000, 700)
         cv2.imshow("Select corners", working_frame)
         cv2.setMouseCallback("Select corners", mouse_callback)
 
-        print("\n📌 Выберите 4 угла поля: ЛВ -> ПВ -> ПН -> ЛН")
-        print("👉 После выбора нажмите 'q'\n")
+        print("\n Выберите 4 угла поля: ЛВ -> ПВ -> ПН -> ЛН")
+        print(" После выбора нажмите 'q'\n")
 
         while True:
             key = cv2.waitKey(1) & 0xFF
@@ -187,24 +186,19 @@ class FieldRectifier:
         return frame
 
     def set_obstacle_params(self, edge_margin: int = 20,
-                            robot_exclusion_radius: int = 60,
                             min_area: int = 500,
                             max_area: int = 5000,
-                            safety_margin: int = 20,
                             threshold_v: int = 100):
+        """Параметры детекции препятствий"""
         self.edge_margin = edge_margin
-        self.robot_exclusion_radius = robot_exclusion_radius
         self.obstacle_min_area = min_area
         self.obstacle_max_area = max_area
-        self.obstacle_safety_margin = safety_margin
         self.obstacle_threshold_v = threshold_v
 
     def detect_obstacles(self, rectified_frame: np.ndarray, robot_center: tuple = None) -> list:
         edge_margin = getattr(self, 'edge_margin', 20)
-        robot_exclusion_radius = getattr(self, 'robot_exclusion_radius', 60)
         min_area = getattr(self, 'obstacle_min_area', 500)
         max_area = getattr(self, 'obstacle_max_area', 5000)
-        safety_margin = getattr(self, 'obstacle_safety_margin', 20)
         threshold_v = getattr(self, 'obstacle_threshold_v', 100)
 
         gray = cv2.cvtColor(rectified_frame, cv2.COLOR_BGR2GRAY)
@@ -220,10 +214,16 @@ class FieldRectifier:
         mask[:, 0:edge_margin] = 0
         mask[:, w - edge_margin:w] = 0
 
+        robot_radius_cm = getattr(self, 'robot_radius', 15.0)
+        robot_radius_px = int(robot_radius_cm / self.field_width * self.output_size[0])
+
+        # Вырезаем зону робота (только если центр в пределах кадра)
         if robot_center is not None:
             cx = int(robot_center[0])
             cy = int(robot_center[1])
-            cv2.circle(mask, (cx, cy), robot_exclusion_radius, 0, -1)
+            # Проверяем, что центр в пределах кадра
+            if 0 <= cx < self.output_size[0] and 0 <= cy < self.output_size[1]:
+                cv2.circle(mask, (cx, cy), robot_radius_px, 0, -1)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -242,29 +242,24 @@ class FieldRectifier:
             else:
                 continue
 
-            # Радиус в ПИКСЕЛЯХ (для отрисовки)
             radius_px = int(np.sqrt(area / np.pi))
-
-            # Переводим радиус в САНТИМЕТРЫ (для планировщика)
             scale_x = self.field_width / self.output_size[0]
             scale_y = self.field_height / self.output_size[1]
             scale_avg = (scale_x + scale_y) / 2
             radius_cm = radius_px * scale_avg
 
-            # В detect_obstacles, реальные координаты центра:
-            real_x = (center_x_rect + 0.5) * scale_x  # центр пикселя, а не угол
-            real_y = (self.output_size[1] - center_y_rect - 0.5) * scale_y
+            real_x = center_x_rect * scale_x
+            real_y = (self.output_size[1] - center_y_rect) * scale_y
 
             obstacles.append({
                 'center_pixel': (center_x_rect, center_y_rect),
                 'center_real': (real_x, real_y),
                 'area': area,
-                'radius_px': radius_px,  # ← для отрисовки
-                'radius_cm': radius_cm,  # ← для планировщика
+                'radius_px': radius_px,
+                'radius_cm': radius_cm,
                 'contour': contour
             })
 
-            # Безопасная зона для визуализации (можно удалить)
             cv2.circle(safety_mask, (int(center_x_rect), int(center_y_rect)),
                        radius_px, 255, -1)
 
@@ -297,13 +292,52 @@ class FieldRectifier:
 
         return frame
 
+    def set_robot_params(self, robot_radius: float = 15.0,
+                         obstacle_safety_margin: float = 5.0,
+                         planning_step: float = 2.0,
+                         show_robot_zone: bool = True,
+                         show_planning_contours: bool = True,
+                         edge_limit_cm: float = 15.0):
+
+        # Параметры робота и планировщика пути
+        self.robot_radius = robot_radius
+        self.obstacle_safety_margin = obstacle_safety_margin
+        self.planning_step = planning_step
+        self.show_robot_zone = show_robot_zone
+        self.show_planning_contours = show_planning_contours
+        self.edge_limit_cm = edge_limit_cm
+
     def set_path_params(self, robot_radius: float = 15.0, edge_margin: float = 30.0):
-        """Установить параметры планировщика пути"""
         self.robot_radius = robot_radius
         self.path_edge_margin = edge_margin
-        print(f"✓ Параметры планировщика пути:")
-        print(f"   Радиус робота: {robot_radius} см")
-        print(f"   Отступ от края поля: {edge_margin} см")
+
+    def draw_edge_limit(self, frame: np.ndarray) -> np.ndarray:
+        h, w = frame.shape[:2]
+
+        # Получаем расстояние от края в сантиметрах
+        edge_limit_cm = getattr(self, 'edge_limit_cm', 15.0)
+        edge_limit_px = int(edge_limit_cm / self.field_width * w)
+
+        # Отступ от края
+        margin = edge_limit_px
+        margin = max(margin, 1)
+
+        # Рисуем пунктирную линию по периметру
+        dash_length = 15
+        gap_length = 15
+
+        # Верхняя и нижняя границы
+        for x in range(margin, w - margin, dash_length + gap_length):
+            cv2.line(frame, (x, margin), (min(x + dash_length, w - margin), margin), (0, 0, 0), 2)
+            y_bottom = h - margin
+            cv2.line(frame, (x, y_bottom), (min(x + dash_length, w - margin), y_bottom), (0, 0, 0), 2)
+
+        # Левая и правая границы
+        for y in range(margin, h - margin, dash_length + gap_length):
+            cv2.line(frame, (margin, y), (margin, min(y + dash_length, h - margin)), (0, 0, 0), 2)
+            x_right = w - margin
+            cv2.line(frame, (x_right, y), (x_right, min(y + dash_length, h - margin)), (0, 0, 0), 2)
+        return frame
 
     def process_video(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -312,9 +346,6 @@ class FieldRectifier:
 
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        print(f"\n📹 Видео: {self.video_path}")
-        print(f"   Кадров: {total_frames}, FPS: {fps:.2f}")
 
         if self.corners is None:
             ret, first_frame = cap.read()
@@ -337,7 +368,6 @@ class FieldRectifier:
         user_point_real = None
         current_robot_pos = None
         self.path_planner = None
-        obstacles = []
 
         def mouse_callback(event, x, y, flags, param):
             nonlocal user_point, user_point_real
@@ -345,12 +375,10 @@ class FieldRectifier:
                 user_point = (x, y)
                 real_x, real_y = self.transform_coordinates(x, y)
                 user_point_real = (real_x, real_y)
-                print(f"📍 Точка: экран ({x}, {y}) → поле ({real_x:.1f}, {real_y:.1f})")
-                self.path_planner = None
+                print(f" Точка: экран ({x}, {y}) → поле ({real_x:.1f}, {real_y:.1f})")
 
         cv2.setMouseCallback("Processing Preview", mouse_callback)
 
-        print(f"\n🔄 Обработка... (окно предпросмотра открыто)")
         print("   Управление:")
         print("   • Левый клик мыши - поставить точку")
         print("   • 'q' - досрочный выход")
@@ -368,13 +396,16 @@ class FieldRectifier:
                     break
                 frame_count += 1
 
-            # Выравниваем кадр
+            # 1. ВЫРАВНИВАЕМ КАДР
             rectified = cv2.warpPerspective(frame, self.H, self.output_size)
-
-            # Рисуем оси координат
             rectified = self.draw_coordinate_axes(rectified, margin=20, axis_length=60)
 
-            # Детекция робота
+            # Добавляем линию границы
+            edge_limit_cm = getattr(self, 'edge_limit_cm', 0)
+            if edge_limit_cm > 0:
+                rectified = self.draw_edge_limit(rectified)
+
+            # 2. ДЕТЕКЦИЯ РОБОТА
             found, robot_id, center_pixel, center_real, marker_corners = self.detect_robot(frame)
 
             if found:
@@ -388,66 +419,58 @@ class FieldRectifier:
                     'y_real': robot_real_y
                 })
 
-            # Детекция препятствий
+            # 3. ДЕТЕКЦИЯ ПРЕПЯТСТВИЙ
             if found:
                 obstacles = self.detect_obstacles(rectified, robot_center=center_pixel)
             else:
                 obstacles = self.detect_obstacles(rectified, robot_center=None)
 
-            # === 1. РИСУЕМ КОНТУРЫ ПРЕПЯТСТВИЙ (синие круги) ===
-            for obs in obstacles:
-                cx = int(obs['center_pixel'][0])
-                cy = int(obs['center_pixel'][1])
-                radius_px = obs['radius_px']
+            # 4. ПЛАНИРОВЩИК ПУТИ
+            if self.path_planner is None:
+                from path_planner import PathPlanner
+                robot_radius = getattr(self, 'robot_radius', 15.0)
+                obstacle_safety = getattr(self, 'obstacle_safety_margin', 5.0)
+                planning_step = getattr(self, 'planning_step', 2.0)
+                edge_limit_cm = getattr(self, 'edge_limit_cm', 15.0)
 
-                cv2.circle(rectified, (cx, cy), radius_px, (255, 0, 0), 2)
-                cv2.line(rectified, (cx - 8, cy), (cx + 8, cy), (255, 0, 0), 2)
-                cv2.line(rectified, (cx, cy - 8), (cx, cy + 8), (255, 0, 0), 2)
+                self.path_planner = PathPlanner(
+                    self.field_width,
+                    self.field_height,
+                    step=planning_step,
+                    robot_radius=robot_radius,
+                    obstacle_safety=obstacle_safety,
+                    edge_limit_cm=edge_limit_cm
+                )
 
-            # === 2. РИСУЕМ РОБОТА ===
-            if found:
-                rectified = self.draw_axes_2d(rectified, marker_corners, robot_id, axis_length=50)
+            # Всегда обновляем карту и рисуем жёлтые контуры препятствий
+            self.path_planner.update_planning_map(obstacles)
+            rectified = self.path_planner.draw_planning_contours(rectified)
 
-                cx = int(center_pixel[0])
-                cy = int(center_pixel[1])
-                robot_zone_radius = self.robot_exclusion_radius
-                cv2.circle(rectified, (cx, cy), robot_zone_radius, (128, 128, 128), 1)
-
-            # === 3. РИСУЕМ ТОЧКУ ===
-            if user_point is not None:
-                cv2.circle(rectified, user_point, 8, (255, 0, 255), -1)
-                cv2.circle(rectified, user_point, 12, (255, 0, 255), 2)
-
-            # === 4. ПОСТРОЕНИЕ МАРШРУТА И КАРТЫ ПРЕПЯТСТВИЙ ===
+            # 5. ЕСЛИ ЕСТЬ ЦЕЛЬ - СТРОИМ МАРШРУТ
+            path = None
             if user_point_real is not None and found and current_robot_pos is not None:
-                if self.path_planner is None:
-                    from path_planner import PathPlanner
-                    robot_radius = getattr(self, 'robot_radius', 15.0)
-                    edge_margin = getattr(self, 'path_edge_margin', 30.0)
-                    self.path_planner = PathPlanner(
-                        self.field_width,
-                        self.field_height,
-                        step=2.0,
-                        robot_radius=robot_radius,
-                    )
-
-                # Обновляем список препятствий в планировщике
-                self.path_planner.update_obstacles(obstacles)
-
-                # Визуализируем карту препятствий (только frame)
-                rectified = self.path_planner.visualize_obstacles_contours(rectified)
-
-                # Ищем путь
                 path = self.path_planner.find_path(current_robot_pos, user_point_real)
                 if path:
                     rectified = self.path_planner.draw_path_on_frame(rectified, path, (0, 255, 255))
                     if frame_count % 30 == 0:
-                        print(f"  Маршрут построен: {len(path)} точек")
+                        print(f" Маршрут построен: {len(path)} точек")
                 else:
                     if frame_count % 30 == 0:
-                        print(f"  ⚠️ Путь не найден!")
+                        print(f" Путь не найден!")
 
-            # === 5. ИНФОРМАЦИЯ В ЛЕВОМ ВЕРХНЕМ УГЛУ ===
+            # 6. ОТРИСОВКА РОБОТА
+            if found and getattr(self, 'show_robot_zone', True):
+                cx = int(center_pixel[0])
+                cy = int(center_pixel[1])
+                robot_radius_px = int(self.robot_radius / self.field_width * self.output_size[0])
+                cv2.circle(rectified, (cx, cy), robot_radius_px, (100, 100, 100), 1)
+
+            # 7. ОТРИСОВКА ТОЧКИ ПОЛЬЗОВАТЕЛЯ
+            if user_point is not None:
+                cv2.circle(rectified, user_point, 8, (255, 0, 255), -1)
+                cv2.circle(rectified, user_point, 12, (255, 0, 255), 2)
+
+            # 8. ИНФОРМАЦИЯ НА ЭКРАНЕ
             info_y = 25
             line_height = 25
 
@@ -468,24 +491,25 @@ class FieldRectifier:
                 cv2.putText(rectified, f"Target: ({user_point_real[0]:.1f}, {user_point_real[1]:.1f})",
                             (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
-            # Показываем и сохраняем
+            # 9. ПОКАЗЫВАЕМ И СОХРАНЯЕМ
             cv2.imshow("Processing Preview", rectified)
             out.write(rectified)
             processed += 1
 
+            # 10. УПРАВЛЕНИЕ
             key = cv2.waitKey(1 if not paused else 0) & 0xFF
 
             if key == ord('q'):
-                print(f"\n⏹️ Обработка прервана на кадре {frame_count}")
+                print(f"\n️ Обработка прервана на кадре {frame_count}")
                 break
             elif key == ord(' '):
                 paused = not paused
-                print("⏸️ Пауза" if paused else "▶️ Продолжение")
+                print("️ Пауза" if paused else " Продолжение")
 
             if processed % 100 == 0:
                 print(f"  Прогресс: {processed}/{total_frames} ({processed * 100 / total_frames:.1f}%)")
 
-            if found and frame_count % 50 == 0:
+            if found and frame_count % 50 == 0 and path is not None:
                 print(f"  Кадр {frame_count}: Робот ID={robot_id}, "
                       f"позиция: ({robot_real_x:.1f}, {robot_real_y:.1f}), "
                       f"препятствий: {len(obstacles)}")
@@ -503,7 +527,7 @@ class FieldRectifier:
 
     def save_trajectory(self, output_file: str = "robot_trajectory.json"):
         if not self.robot_trajectory:
-            print("✗ Нет данных о траектории для сохранения")
+            print(" Нет данных о траектории для сохранения")
             return
 
         trajectory_json = []
@@ -525,7 +549,7 @@ class FieldRectifier:
 
         with open(output_file, 'w') as f:
             json.dump(data, f, indent=2)
-        print(f"✓ Траектория сохранена в {output_file}")
+        print(f" Траектория сохранена в {output_file}")
 
     def save_corners(self, corners_file: str = "field_corners.json"):
         if self.corners is None:
@@ -537,7 +561,7 @@ class FieldRectifier:
         }
         with open(corners_file, 'w') as f:
             json.dump(data, f, indent=2)
-        print(f"✓ Углы сохранены в {corners_file}")
+        print(f" Углы сохранены в {corners_file}")
 
     def load_corners(self, corners_file: str) -> bool:
         try:
@@ -549,5 +573,5 @@ class FieldRectifier:
                 print(f"✓ Углы загружены из {corners_file}")
                 return True
         except Exception as e:
-            print(f"✗ Не удалось загрузить углы: {e}")
+            print(f" Не удалось загрузить углы: {e}")
             return False

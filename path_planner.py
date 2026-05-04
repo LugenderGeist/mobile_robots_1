@@ -4,34 +4,26 @@ from typing import List, Tuple
 import math
 from collections import deque
 
-
 class PathPlanner:
     def __init__(self, field_width: float, field_height: float, step: float = 2.0,
-                 robot_radius: float = 15.0, edge_margin: float = 30.0):
-        """
-        Args:
-            field_width: ширина поля в см
-            field_height: высота поля в см
-            step: шаг дискретизации в см
-            robot_radius: радиус робота в см
-            edge_margin: отступ от края поля в см
-        """
+                 robot_radius: float = 15.0, obstacle_safety: float = 5.0,
+                 edge_limit_cm: float = 15.0):
         self.field_width = field_width
         self.field_height = field_height
         self.step = step
         self.robot_radius = robot_radius
-        self.edge_margin = edge_margin
+        self.obstacle_safety = obstacle_safety
+        self.edge_limit_cm = edge_limit_cm  # ← добавить
         self.grid_width = int(field_width / step) + 1
         self.grid_height = int(field_height / step) + 1
-        self.obstacles = []  # список препятствий (точные)
+        self.obstacles = []
         self.obstacle_map = np.zeros((self.grid_height, self.grid_width), dtype=np.uint8)
         self.path = []
 
     def update_obstacles(self, obstacles: List[dict]):
-        """Обновить список препятствий (все препятствия, без обрезки по краям)"""
         self.obstacles = obstacles
 
-        # Строим карту для визуализации (все препятствия)
+        # Строим карту для визуализации
         self.obstacle_map.fill(0)
 
         for obs in obstacles:
@@ -50,22 +42,47 @@ class PathPlanner:
                         if dx * dx + dy * dy <= cell_radius * cell_radius:
                             self.obstacle_map[grid_y, grid_x] = 1
 
+    def update_planning_map(self, obstacles: List[dict]):
+
+        self.obstacles = obstacles
+
+        self.obstacle_map.fill(0)
+
+        for obs in obstacles:
+            center_x, center_y = obs['center_real']
+
+            # Радиус для планирования = физический радиус препятствия + радиус робота + доп. запас
+            total_radius = obs['radius_cm'] + self.robot_radius + self.obstacle_safety
+
+            cell_x = int(center_x / self.step)
+            cell_y = int(center_y / self.step)
+            cell_radius = int(total_radius / self.step) + 1
+
+            for dx in range(-cell_radius, cell_radius + 1):
+                for dy in range(-cell_radius, cell_radius + 1):
+                    grid_x = cell_x + dx
+                    grid_y = cell_y + dy
+                    if (0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height):
+                        if dx * dx + dy * dy <= cell_radius * cell_radius:
+                            self.obstacle_map[grid_y, grid_x] = 1
+
     def is_cell_safe(self, grid_x: int, grid_y: int) -> bool:
-        """
-        Проверить, может ли робот находиться в этой клетке
-        """
+
         # Центр клетки в реальных координатах
         cx = (grid_x + 0.5) * self.step
         cy = (grid_y + 0.5) * self.step
 
-        # 1. Проверка границ поля (с учётом радиуса робота)
-        if (cx < self.robot_radius or
-                cx > self.field_width - self.robot_radius or
-                cy < self.robot_radius or
-                cy > self.field_height - self.robot_radius):
+        # Получаем расстояние от края (то же, что и в draw_edge_limit)
+        edge_limit_cm = getattr(self, 'edge_limit_cm', 15.0)
+
+        # Проверка границ поля — центр робота не может быть ближе, чем edge_limit_cm
+        if (cx < edge_limit_cm or
+                cx > self.field_width - edge_limit_cm or
+                cy < edge_limit_cm or
+                cy > self.field_height - edge_limit_cm):
             return False
 
-        # 2. Проверка расстояния до препятствий
+        # Проверка расстояния до препятствий
         for obs in self.obstacles:
             obs_x, obs_y = obs['center_real']
             obs_radius = obs['radius_cm']
@@ -76,7 +93,6 @@ class PathPlanner:
         return True
 
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
-        """Перевести реальные координаты в клетки сетки"""
         grid_x = int(x / self.step)
         grid_y = int(y / self.step)
         grid_x = max(0, min(grid_x, self.grid_width - 1))
@@ -84,14 +100,9 @@ class PathPlanner:
         return grid_x, grid_y
 
     def grid_to_world(self, grid_x: int, grid_y: int) -> Tuple[float, float]:
-        """Перевести клетки сетки в реальные координаты (центр клетки)"""
         return (grid_x + 0.5) * self.step, (grid_y + 0.5) * self.step
 
     def find_path(self, start: Tuple[float, float], goal: Tuple[float, float]) -> List[Tuple[float, float]]:
-        """
-        BFS поиск пути с учётом радиуса робота
-        """
-        print(f"\n  🔍 BFS поиск пути (радиус робота={self.robot_radius} см): {start} → {goal}")
 
         # Преобразуем в клетки сетки
         start_grid = self.world_to_grid(start[0], start[1])
@@ -103,15 +114,15 @@ class PathPlanner:
 
         # Проверка стартовой позиции
         if not self.is_cell_safe(start_grid[0], start_grid[1]):
-            print("    ❌ Стартовая позиция небезопасна (препятствие или край)")
+            print(" Стартовая позиция небезопасна (препятствие или край)")
             return []
 
         # Проверка целевой позиции
         if not self.is_cell_safe(goal_grid[0], goal_grid[1]):
-            print("    ❌ Целевая позиция небезопасна (препятствие или край)")
+            print(" Целевая позиция небезопасна (препятствие или край)")
             return []
 
-        # BFS с 8 направлениями
+        # BFS
         moves = [(-1, -1), (-1, 0), (-1, 1),
                  (0, -1), (0, 1),
                  (1, -1), (1, 0), (1, 1)]
@@ -140,10 +151,7 @@ class PathPlanner:
 
                 # Упрощаем путь
                 self.path = self.simplify_path(path)
-
                 total_length = self.calculate_path_length(self.path)
-                print(f"    ✅ Путь найден! Длина: {total_length:.1f} см, шагов: {len(self.path)}")
-                print(f"    Посещено клеток: {len(visited)} из {self.grid_width * self.grid_height}")
                 return self.path
 
             for dx, dy in moves:
@@ -153,12 +161,9 @@ class PathPlanner:
                     visited.add((nx, ny))
                     parent[(nx, ny)] = (x, y)
                     queue.append((nx, ny))
-
-        print(f"    ❌ Путь не найден! Посещено клеток: {len(visited)}")
         return []
 
     def calculate_path_length(self, path: List[Tuple[float, float]]) -> float:
-        """Вычислить длину пути в сантиметрах"""
         if len(path) < 2:
             return 0.0
         total = 0.0
@@ -169,7 +174,6 @@ class PathPlanner:
         return total
 
     def simplify_path(self, path: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-        """Упростить путь, убирая лишние точки на прямой"""
         if len(path) <= 2:
             return path
 
@@ -187,11 +191,10 @@ class PathPlanner:
         simplified.append(path[-1])
         return simplified
 
-    def visualize_obstacles_contours(self, frame: np.ndarray) -> np.ndarray:
-        """Нарисовать контуры всех препятствий (красным) и их центры (зелёным)"""
+    def draw_planning_contours(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
 
-        # Рисуем красные контуры ВСЕХ препятствий
+        # Рисуем контуры на основе obstacle_map
         obstacle_map_uint8 = (self.obstacle_map * 255).astype(np.uint8)
         contours, _ = cv2.findContours(
             obstacle_map_uint8,
@@ -212,22 +215,12 @@ class PathPlanner:
 
             if len(pixel_contour) > 2:
                 pixel_contour = np.array(pixel_contour, dtype=np.int32)
-                cv2.polylines(frame, [pixel_contour], True, (0, 0, 255), 2)
-
-        # Рисуем центры препятствий (зелёные крестики)
-        for obs in self.obstacles:
-            real_x, real_y = obs['center_real']
-            x = int(real_x / self.field_width * w)
-            y = int(h - (real_y / self.field_height * h))
-            cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
-            cv2.line(frame, (x - 10, y), (x + 10, y), (0, 255, 0), 2)
-            cv2.line(frame, (x, y - 10), (x, y + 10), (0, 255, 0), 2)
-
+                # Жёлтый контур (для планирования)
+                cv2.polylines(frame, [pixel_contour], True, (0, 255, 255), 2)
         return frame
 
     def draw_path_on_frame(self, frame: np.ndarray, path: List[Tuple[float, float]],
                            color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
-        """Нарисовать путь на кадре"""
         if not path or len(path) < 2:
             return frame
 
@@ -243,5 +236,4 @@ class PathPlanner:
 
         for point in points[1:-1]:
             cv2.circle(frame, point, 4, color, -1)
-
         return frame
