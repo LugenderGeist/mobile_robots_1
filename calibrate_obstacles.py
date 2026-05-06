@@ -1,9 +1,13 @@
 import cv2
 import numpy as np
 import json
+import os
 
-VIDEO_FILE = "video_1.mp4"
-CORNERS_FILE = "field_corners.json"
+# ========== НАСТРОЙКИ ==========
+CAMERA_ID = 1  # ID камеры (0 - встроенная, 1 - USB)
+CORNERS_FILE = "field_corners.json"  # Файл с углами для камеры
+PARAMS_FILE = "obstacle_params_camera.json"  # Файл с параметрами для камеры
+# =================================
 
 def nothing(x):
     pass
@@ -15,31 +19,38 @@ def load_homography():
             corners = np.array(data['corners'], dtype=np.float32)
             dst = np.array([[0, 0], [720, 0], [720, 720], [0, 720]], dtype=np.float32)
             H, _ = cv2.findHomography(corners, dst)
-            print(f"✓ Загружены углы поля")
+            print(f"✓ Загружены углы поля из {CORNERS_FILE}")
             return H, corners
     except Exception as e:
         print(f"✗ Не удалось загрузить углы: {e}")
         return None, None
 
-
 def main():
     print("=" * 60)
-    print("НАСТРОЙКА ОБНАРУЖЕНИЯ ПРЕПЯТСТВИЙ")
+    print("НАСТРОЙКА ОБНАРУЖЕНИЯ ПРЕПЯТСТВИЙ ДЛЯ КАМЕРЫ")
     print("Ищем всё, что темнее белого фона")
     print("=" * 60)
 
-    # Открываем видео
-    cap = cv2.VideoCapture(VIDEO_FILE)
+    # Открываем камеру
+    cap = cv2.VideoCapture(CAMERA_ID)
     if not cap.isOpened():
-        print(f"❌ Не удалось открыть видео: {VIDEO_FILE}")
+        print(f"❌ Не удалось открыть камеру {CAMERA_ID}")
+        print("   Проверьте подключение камеры и правильность ID")
         return
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # Получаем FPS
     fps = cap.get(cv2.CAP_PROP_FPS)
-    print(f"Видео: {total_frames} кадров, {fps:.2f} FPS")
+    if fps <= 0:
+        fps = 30
+    print(f"📷 Камера: ID={CAMERA_ID}, FPS={fps:.1f}")
 
     # Загружаем гомографию
     H, corners = load_homography()
+    if H is None:
+        print("\n⚠️ Нет калибровки для камеры!")
+        print("   Сначала запустите calibrate_camera.py для настройки углов поля")
+        cap.release()
+        return
 
     # Создаём окна
     cv2.namedWindow("Obstacle Detection", cv2.WINDOW_NORMAL)
@@ -52,63 +63,76 @@ def main():
     cv2.resizeWindow("Parameters", 400, 300)
 
     # Создаём трекбары
-    cv2.createTrackbar("Threshold White", "Parameters", 220, 255, nothing)  # порог для белого
+    cv2.createTrackbar("Threshold White", "Parameters", 220, 255, nothing)
     cv2.createTrackbar("Min Area", "Parameters", 500, 5000, nothing)
     cv2.createTrackbar("Blur", "Parameters", 5, 20, nothing)
     cv2.createTrackbar("Edge Margin", "Parameters", 20, 100, nothing)
 
-    # Трекбар для навигации по кадрам
-    cv2.createTrackbar("Frame", "Parameters", 0, total_frames - 1, nothing)
+    # Дополнительные параметры для камеры
+    cv2.createTrackbar("Brightness", "Parameters", 0, 100, nothing)
+    cv2.createTrackbar("Contrast", "Parameters", 100, 200, nothing)
 
-    current_frame = 0
-    auto_play = False
-    best_params = None
+    print("\n📌 ИНСТРУКЦИЯ:")
+    print("   Настройте параметры с помощью ползунков")
+    print("   • 's' - сохранить параметры")
+    print("   • 'p' - пауза/продолжение")
+    print("   • 'q' - выход\n")
 
     # Загружаем сохранённые параметры
     try:
-        with open("obstacle_params.json", "r") as f:
+        with open(PARAMS_FILE, "r") as f:
             saved = json.load(f)
             cv2.setTrackbarPos("Threshold White", "Parameters", saved.get('threshold_white', 220))
             cv2.setTrackbarPos("Min Area", "Parameters", saved.get('min_area', 500))
             cv2.setTrackbarPos("Blur", "Parameters", saved.get('blur', 5))
             cv2.setTrackbarPos("Edge Margin", "Parameters", saved.get('edge_margin', 20))
+            cv2.setTrackbarPos("Brightness", "Parameters", saved.get('brightness', 0))
+            cv2.setTrackbarPos("Contrast", "Parameters", saved.get('contrast', 100))
             print("✓ Загружены сохранённые параметры")
     except:
         pass
 
+    paused = False
+    frame_count = 0
+    best_params = None
+
     while True:
-        # Получаем позицию
-        if not auto_play:
-            current_frame = cv2.getTrackbarPos("Frame", "Parameters")
-
-        # Читаем кадр
-        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
-        ret, frame = cap.read()
-
-        if not ret:
-            break
-
-        # Выравниваем поле
-        if H is not None:
-            frame = cv2.warpPerspective(frame, H, (720, 720))
+        if not paused:
+            ret, frame = cap.read()
+            if not ret:
+                print("⚠️ Не удалось получить кадр с камеры")
+                break
+            frame_count += 1
 
         # Получаем параметры
         threshold_white = cv2.getTrackbarPos("Threshold White", "Parameters")
         min_area = cv2.getTrackbarPos("Min Area", "Parameters")
         blur_size = cv2.getTrackbarPos("Blur", "Parameters")
         edge_margin = cv2.getTrackbarPos("Edge Margin", "Parameters")
+        brightness = cv2.getTrackbarPos("Brightness", "Parameters") - 50
+        contrast = cv2.getTrackbarPos("Contrast", "Parameters") / 100.0
 
         if blur_size % 2 == 0:
             blur_size += 1
 
+        # Предобработка изображения
+        processed = frame.copy()
+
+        # Яркость и контраст
+        processed = cv2.convertScaleAbs(processed, alpha=contrast, beta=brightness)
+
+        # Выравниваем поле
+        if H is not None:
+            processed = cv2.warpPerspective(processed, H, (720, 720))
+
         # Обработка
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
 
         # Размытие
         if blur_size > 1:
             gray = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
 
-        # ПОРОГОВАЯ ОБРАБОТКА: всё, что темнее threshold_white, становится белым
+        # Пороговая обработка
         _, mask = cv2.threshold(gray, threshold_white, 255, cv2.THRESH_BINARY_INV)
 
         # Морфология
@@ -116,7 +140,7 @@ def main():
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        # Убираем края (по edge_margin)
+        # Убираем края
         h, w = mask.shape
         mask[0:edge_margin, :] = 0
         mask[h - edge_margin:h, :] = 0
@@ -127,7 +151,7 @@ def main():
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         # Рисуем результат
-        result = frame.copy()
+        result = processed.copy()
         obstacle_count = 0
 
         for contour in contours:
@@ -148,32 +172,37 @@ def main():
 
         # Информация на кадре
         info_y = 30
-        cv2.putText(result, f"Frame: {current_frame + 1}/{total_frames}", (10, info_y),
+        cv2.putText(result, f"Frame: {frame_count}", (10, info_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         info_y += 25
         cv2.putText(result, f"Threshold: {threshold_white}, Min Area: {min_area}, Blur: {blur_size}",
+                    (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        info_y += 20
+        cv2.putText(result, f"Brightness: {brightness}, Contrast: {contrast:.1f}, Edge Margin: {edge_margin}",
                     (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         info_y += 25
         cv2.putText(result, f"Obstacles found: {obstacle_count}",
                     (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                     (0, 255, 0) if obstacle_count > 0 else (0, 0, 255), 1)
 
-        if auto_play:
-            cv2.putText(result, "AUTO PLAY: ON", (result.shape[1] - 150, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        if paused:
+            cv2.putText(result, "PAUSED", (result.shape[1] - 100, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
         # Показываем маску
         mask_colored = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
         cv2.putText(mask_colored, f"Mask (white = obstacles)", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(mask_colored, f"Obstacles: {obstacle_count}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if obstacle_count > 0 else (0, 0, 255), 1)
 
         cv2.imshow("Obstacle Detection", result)
         cv2.imshow("Mask", mask_colored)
 
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(1 if not paused else 0) & 0xFF
 
         if key == ord('q'):
-            print("\n👋 Выход")
+            print("\n Выход")
             break
 
         elif key == ord('s'):
@@ -181,32 +210,33 @@ def main():
                 'threshold_white': threshold_white,
                 'min_area': min_area,
                 'blur': blur_size,
-                'edge_margin': edge_margin
+                'edge_margin': edge_margin,
+                'brightness': brightness,
+                'contrast': contrast
             }
-            with open("obstacle_params.json", "w") as f:
+            with open(PARAMS_FILE, "w") as f:
                 json.dump(best_params, f, indent=2)
-            print(f"\n✅ Параметры сохранены: Threshold={threshold_white}, Min Area={min_area}")
+            print(f"\n Параметры сохранены в {PARAMS_FILE}")
+            print(f"   Threshold: {threshold_white}, Min Area: {min_area}, Blur: {blur_size}")
+            print(f"   Brightness: {brightness}, Contrast: {contrast:.1f}, Edge Margin: {edge_margin}")
 
-        elif key == ord(' '):
-            auto_play = not auto_play
-            print("▶️ Автовоспроизведение" if auto_play else "⏸️ Пауза")
-
-        elif key == 81 or key == 2424832:  # Стрелка влево
-            current_frame = max(0, current_frame - 30)
-            cv2.setTrackbarPos("Frame", "Parameters", current_frame)
-            auto_play = False
-
-        elif key == 83 or key == 2555904:  # Стрелка вправо
-            current_frame = min(total_frames - 1, current_frame + 30)
-            cv2.setTrackbarPos("Frame", "Parameters", current_frame)
-            auto_play = False
-
-        if auto_play:
-            current_frame = (current_frame + 1) % total_frames
-            cv2.setTrackbarPos("Frame", "Parameters", current_frame)
+        elif key == ord('p'):
+            paused = not paused
+            print("⏸ Пауза" if paused else "▶ Продолжение")
 
     cap.release()
     cv2.destroyAllWindows()
 
+    if best_params:
+        print("\n Рекомендуемые параметры для video.py:")
+        print(f"   OBSTACLE_THRESHOLD_V = {best_params['threshold_white']}")
+        print(f"   OBSTACLE_MIN_AREA = {best_params['min_area']}")
+        print(f"   EDGE_MARGIN = {best_params['edge_margin']}")
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n Программа остановлена")
+    except Exception as e:
+        print(f"\n Ошибка: {e}")
