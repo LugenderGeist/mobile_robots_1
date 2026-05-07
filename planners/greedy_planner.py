@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 from typing import List, Tuple
 import math
-import heapq
 
 def create_planner(field_width: float, field_height: float, step: float = 2.0,
                    robot_radius: float = 15.0, obstacle_safety: float = 5.0,
@@ -153,16 +152,13 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
     print(" Путь не найден")
     return []
 
-
 def get_velocities(planner: dict, current_x: float, current_y: float,
-                   max_speed: float = 0.5, lookahead_distance: float = 10.0,
-                   kp: float = 0.8, goal_tolerance: float = 5.0) -> Tuple[float, float]:
+                   max_speed: float = 0.5, smoothing: float = 10.0,
+                   kp: float = 0.8, acceptable_error: float = 5.0) -> Tuple[float, float]:
     path = planner['path']
     if not path or len(path) < 2:
-        print("️ Нет пути в get_velocities")
         return 0.0, 0.0
 
-    # Находим ближайшую точку
     min_dist = float('inf')
     nearest_idx = 0
     for i, point in enumerate(path):
@@ -172,33 +168,30 @@ def get_velocities(planner: dict, current_x: float, current_y: float,
             min_dist = dist
             nearest_idx = i
 
-    # Ищем целевую точку с упреждением
-    target_idx = min(nearest_idx + 2, len(path) - 1)
+    target_idx = min(nearest_idx + 3, len(path) - 1)  # на 3 точки вперёд
     target_x, target_y = path[target_idx]
-    # или оставьте ваш существующий код
 
     error_x = target_x - current_x
     error_y = target_y - current_y
     error_distance = math.hypot(error_x, error_y)
 
-    print(f" current=({current_x:.1f}, {current_y:.1f})")
-    print(f" target=({target_x:.1f}, {target_y:.1f})")
-    print(f" error=({error_x:.1f}, {error_y:.1f}), dist={error_distance:.1f}")
-
-    if error_distance < goal_tolerance:
-        print(" Цель достигнута")
-        return 0.0, 0.0
+    min_speed_ms = 0.03  # 3 см/с
 
     max_speed_cm = max_speed * 100.0
     speed_cm = min(kp * error_distance, max_speed_cm)
-    speed_ms = speed_cm / 100.0
 
-    vx = (error_x / error_distance) * speed_ms
-    vy = (error_y / error_distance) * speed_ms
+    final_goal = path[-1]
+    dist_to_final = math.hypot(final_goal[0] - current_x, final_goal[1] - current_y)
+    if dist_to_final > acceptable_error:
+        speed_cm = max(speed_cm, min_speed_ms * 100.0)
 
-    print(f" speeds: vx={vx:.3f}, vy={vy:.3f}")
+    if error_distance > 0:
+        vx = (error_x / error_distance) * (speed_cm / 100.0)
+        vy = (error_y / error_distance) * (speed_cm / 100.0)
+    else:
+        vx, vy = 0.0, 0.0
 
-    return vx, vy
+    return vx, -vy
 
 def draw_planning_contours(planner: dict, frame: np.ndarray) -> np.ndarray:
     h, w = frame.shape[:2]

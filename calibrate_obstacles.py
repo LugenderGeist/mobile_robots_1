@@ -19,36 +19,31 @@ def load_homography():
             corners = np.array(data['corners'], dtype=np.float32)
             dst = np.array([[0, 0], [720, 0], [720, 720], [0, 720]], dtype=np.float32)
             H, _ = cv2.findHomography(corners, dst)
-            print(f"✓ Загружены углы поля из {CORNERS_FILE}")
+            print(f"Загружены углы поля из {CORNERS_FILE}")
             return H, corners
     except Exception as e:
-        print(f"✗ Не удалось загрузить углы: {e}")
+        print(f"Не удалось загрузить углы: {e}")
         return None, None
 
 def main():
-    print("=" * 60)
-    print("НАСТРОЙКА ОБНАРУЖЕНИЯ ПРЕПЯТСТВИЙ ДЛЯ КАМЕРЫ")
-    print("Ищем всё, что темнее белого фона")
-    print("=" * 60)
 
     # Открываем камеру
     cap = cv2.VideoCapture(CAMERA_ID)
     if not cap.isOpened():
-        print(f"❌ Не удалось открыть камеру {CAMERA_ID}")
-        print("   Проверьте подключение камеры и правильность ID")
+        print(f"Не удалось открыть камеру {CAMERA_ID}")
         return
 
     # Получаем FPS
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
         fps = 30
-    print(f"📷 Камера: ID={CAMERA_ID}, FPS={fps:.1f}")
+    print(f"Камера: ID={CAMERA_ID}, FPS={fps:.1f}")
 
     # Загружаем гомографию
     H, corners = load_homography()
     if H is None:
-        print("\n⚠️ Нет калибровки для камеры!")
-        print("   Сначала запустите calibrate_camera.py для настройки углов поля")
+        print("\nНет калибровки для камеры!")
+        print("Сначала запустите calibrate_camera.py для настройки углов поля")
         cap.release()
         return
 
@@ -72,12 +67,6 @@ def main():
     cv2.createTrackbar("Brightness", "Parameters", 0, 100, nothing)
     cv2.createTrackbar("Contrast", "Parameters", 100, 200, nothing)
 
-    print("\n📌 ИНСТРУКЦИЯ:")
-    print("   Настройте параметры с помощью ползунков")
-    print("   • 's' - сохранить параметры")
-    print("   • 'p' - пауза/продолжение")
-    print("   • 'q' - выход\n")
-
     # Загружаем сохранённые параметры
     try:
         with open(PARAMS_FILE, "r") as f:
@@ -100,7 +89,7 @@ def main():
         if not paused:
             ret, frame = cap.read()
             if not ret:
-                print("⚠️ Не удалось получить кадр с камеры")
+                print("Не удалось получить кадр с камеры")
                 break
             frame_count += 1
 
@@ -170,21 +159,6 @@ def main():
         cv2.rectangle(result, (edge_margin, edge_margin),
                       (w - edge_margin, h - edge_margin), (0, 255, 255), 2)
 
-        # Информация на кадре
-        info_y = 30
-        cv2.putText(result, f"Frame: {frame_count}", (10, info_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        info_y += 25
-        cv2.putText(result, f"Threshold: {threshold_white}, Min Area: {min_area}, Blur: {blur_size}",
-                    (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        info_y += 20
-        cv2.putText(result, f"Brightness: {brightness}, Contrast: {contrast:.1f}, Edge Margin: {edge_margin}",
-                    (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        info_y += 25
-        cv2.putText(result, f"Obstacles found: {obstacle_count}",
-                    (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                    (0, 255, 0) if obstacle_count > 0 else (0, 0, 255), 1)
-
         if paused:
             cv2.putText(result, "PAUSED", (result.shape[1] - 100, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
@@ -222,16 +196,10 @@ def main():
 
         elif key == ord('p'):
             paused = not paused
-            print("⏸ Пауза" if paused else "▶ Продолжение")
+            print("Пауза" if paused else "Продолжение")
 
     cap.release()
     cv2.destroyAllWindows()
-
-    if best_params:
-        print("\n Рекомендуемые параметры для video.py:")
-        print(f"   OBSTACLE_THRESHOLD_V = {best_params['threshold_white']}")
-        print(f"   OBSTACLE_MIN_AREA = {best_params['min_area']}")
-        print(f"   EDGE_MARGIN = {best_params['edge_margin']}")
 
 if __name__ == "__main__":
     try:

@@ -1,10 +1,8 @@
 import cv2
 import cv2.aruco as aruco
 import numpy as np
-from pathlib import Path
 import json
 
-# Глобальные переменные для состояния
 _state = {
     'field_width': None,
     'field_height': None,
@@ -22,8 +20,6 @@ _state = {
     'robot_radius': 15.0,
     'obstacle_safety_margin': 5.0,
     'planning_step': 2.0,
-    'show_robot_zone': True,
-    'show_planning_contours': True,
     'edge_limit_cm': 15.0,
     'safety_mask': None,
 }
@@ -41,13 +37,10 @@ def set_obstacle_params(edge_margin: int = 20, min_area: int = 500,
     _state['obstacle_threshold_v'] = threshold_v
 
 def set_robot_params(robot_radius: float = 15.0, obstacle_safety_margin: float = 5.0,
-                     planning_step: float = 2.0, show_robot_zone: bool = True,
-                     show_planning_contours: bool = True, edge_limit_cm: float = 15.0):
+                     planning_step: float = 2.0, edge_limit_cm: float = 15.0):
     _state['robot_radius'] = robot_radius
     _state['obstacle_safety_margin'] = obstacle_safety_margin
     _state['planning_step'] = planning_step
-    _state['show_robot_zone'] = show_robot_zone
-    _state['show_planning_contours'] = show_planning_contours
     _state['edge_limit_cm'] = edge_limit_cm
 
 # ========== КАЛИБРОВКА ==========
@@ -59,7 +52,6 @@ def set_corners_manually(frame: np.ndarray) -> np.ndarray:
     if scale < 1.0:
         new_w, new_h = int(w * scale), int(h * scale)
         display_frame = cv2.resize(frame, (new_w, new_h))
-        print(f"Изображение уменьшено: {w}x{h} -> {new_w}x{new_h}")
     else:
         display_frame = frame.copy()
         scale = 1.0
@@ -74,9 +66,8 @@ def set_corners_manually(frame: np.ndarray) -> np.ndarray:
             cv2.putText(working_frame, str(len(corners)), (x + 10, y - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             cv2.imshow("Select corners", working_frame)
-            print(f"  Точка {len(corners)}: ({orig_x}, {orig_y})")
             if len(corners) == 4:
-                print("\nВыбраны все 4 угла! Нажмите 'q'")
+                print("\nНажмите 'q'")
 
     cv2.namedWindow("Select corners", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Select corners", 1000, 700)
@@ -193,7 +184,7 @@ def detect_obstacles(rectified_frame: np.ndarray, robot_center: tuple = None) ->
     return obstacles
 
 # ========== ОТРИСОВКА ==========
-def draw_axes_2d(frame: np.ndarray, marker_corners: np.ndarray, marker_id: int, axis_length: float = 60) -> np.ndarray:
+def draw_axes_2d(frame: np.ndarray, marker_corners: np.ndarray, axis_length: float = 60) -> np.ndarray:
     if len(marker_corners.shape) == 3:
         marker_corners = marker_corners[0]
     pts = marker_corners.astype(np.float32).reshape(-1, 1, 2)
@@ -256,15 +247,6 @@ def draw_edge_limit(frame: np.ndarray) -> np.ndarray:
         cv2.line(frame, (x_right, y), (x_right, min(y + dash_length, h - margin)), (0, 0, 0), 2)
     return frame
 
-# ========== СОХРАНЕНИЕ ==========
-def save_trajectory(output_file: str = "robot_trajectory.json"):
-    if not _state['robot_trajectory']:
-        print("✗ Нет данных о траектории для сохранения")
-        return
-    with open(output_file, 'w') as f:
-        json.dump(_state['robot_trajectory'], f, indent=2)
-    print(f"✓ Траектория сохранена в {output_file}")
-
 def save_corners(corners_file: str = "field_corners.json"):
     if _state['corners'] is None:
         return
@@ -275,7 +257,7 @@ def save_corners(corners_file: str = "field_corners.json"):
     }
     with open(corners_file, 'w') as f:
         json.dump(data, f, indent=2)
-    print(f"✓ Углы сохранены в {corners_file}")
+    print(f"Углы сохранены в {corners_file}")
 
 def load_corners(corners_file: str) -> bool:
     try:
@@ -285,193 +267,35 @@ def load_corners(corners_file: str) -> bool:
             _state['field_width'] = data.get('field_width', _state['field_width'])
             _state['field_height'] = data.get('field_height', _state['field_height'])
             _state['H'], _state['H_inv'] = compute_homography(_state['corners'])
-            print(f"✓ Углы загружены из {corners_file}")
+            print(f"Углы загружены из {corners_file}")
             return True
     except Exception as e:
-        print(f"✗ Не удалось загрузить углы: {e}")
+        print(f"Не удалось загрузить углы: {e}")
         return False
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 def reset_trajectory():
     _state['robot_trajectory'] = []
 
-def process_video(video_path: str, output_path: str = "output_video.mp4"):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise ValueError(f"Не удалось открыть видео: {video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    if _state['corners'] is None:
-        ret, first_frame = cap.read()
-        if not ret:
-            raise ValueError("Не удалось прочитать первый кадр")
-        _state['corners'] = set_corners_manually(first_frame)
-        _state['H'], _state['H_inv'] = compute_homography(_state['corners'])
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, _state['output_size'])
-
-    cv2.namedWindow("Processing Preview", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Processing Preview", 800, 800)
-
-    user_point = None
-    user_point_real = None
-    current_robot_pos = None
-    planner = None
-    path = None
-
-    def mouse_callback(event, x, y, flags, param):
-        nonlocal user_point, user_point_real, planner
-        if event == cv2.EVENT_LBUTTONDOWN:
-            user_point = (x, y)
-            real_x, real_y = transform_coordinates(x, y)
-            user_point_real = (real_x, real_y)
-            print(f" Точка: экран ({x}, {y}) → поле ({real_x:.1f}, {real_y:.1f}) см")
-            planner = None
-
-    cv2.setMouseCallback("Processing Preview", mouse_callback)
-
-    frame_count = 0
-    processed = 0
-    _state['robot_trajectory'] = []
-    paused = False
-
-    while True:
-        if not paused:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame_count += 1
-
-        # Выравниваем кадр
-        rectified = cv2.warpPerspective(frame, _state['H'], _state['output_size'])
-        rectified = draw_coordinate_axes(rectified, margin=20, axis_length=60)
-
-        if _state['edge_limit_cm'] > 0:
-            rectified = draw_edge_limit(rectified)
-
-        # Детекция робота
-        found, robot_id, center_pixel, center_real, marker_corners = detect_robot(frame)
-
-        if found:
-            robot_real_x, robot_real_y = transform_coordinates(center_pixel[0], center_pixel[1])
-            current_robot_pos = (robot_real_x, robot_real_y)
-            _state['robot_trajectory'].append({
-                'frame': frame_count,
-                'x_pixel': center_pixel[0],
-                'y_pixel': center_pixel[1],
-                'x_real': robot_real_x,
-                'y_real': robot_real_y
-            })
-
-        # Детекция препятствий
-        if found:
-            obstacles = detect_obstacles(rectified, robot_center=center_pixel)
-        else:
-            obstacles = detect_obstacles(rectified, robot_center=None)
-
-        # Планировщик пути
-        if planner is None:
-            from planners.greedy_planner import  create_planner, update_obstacles, draw_planning_contours, find_path, draw_path_on_frame
-            planner = create_planner(
-                field_width=_state['field_width'],
-                field_height=_state['field_height'],
-                step=_state['planning_step'],
-                robot_radius=_state['robot_radius'],
-                obstacle_safety=_state['obstacle_safety_margin'],
-                edge_limit_cm=_state['edge_limit_cm']
-            )
-
-        update_obstacles(planner, obstacles)
-        rectified = draw_planning_contours(planner, rectified)
-
-        # Маршрут
-        if user_point_real is not None and found and current_robot_pos is not None:
-            path = find_path(planner, current_robot_pos, user_point_real)
-            if path:
-                rectified = draw_path_on_frame(planner, rectified, path, (0, 255, 255))
-
-        # Отрисовка робота
-        if found and _state['show_robot_zone']:
-            cx = int(center_pixel[0])
-            cy = int(center_pixel[1])
-            robot_radius_px = int(_state['robot_radius'] / _state['field_width'] * _state['output_size'][0])
-            cv2.circle(rectified, (cx, cy), robot_radius_px, (100, 100, 100), 1)
-
-        # Точка цели
-        if user_point is not None:
-            cv2.circle(rectified, user_point, 8, (255, 0, 255), -1)
-            cv2.circle(rectified, user_point, 12, (255, 0, 255), 2)
-
-        # Информация
-        info_y = 25
-        cv2.putText(rectified, f"Obstacles: {len(obstacles)}", (10, info_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-        info_y += 25
-
-        if found:
-            cv2.putText(rectified, f"Robot: ({robot_real_x:.1f}, {robot_real_y:.1f})",
-                        (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-            info_y += 25
-
-        if user_point_real is not None:
-            cv2.putText(rectified, f"Target: ({user_point_real[0]:.1f}, {user_point_real[1]:.1f})",
-                        (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-
-        cv2.imshow("Processing Preview", rectified)
-        out.write(rectified)
-        processed += 1
-
-        key = cv2.waitKey(1 if not paused else 0) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord(' '):
-            paused = not paused
-
-        if processed % 100 == 0:
-            print(f"  Прогресс: {processed}/{total_frames} ({processed * 100 / total_frames:.1f}%)")
-
-        if found and frame_count % 50 == 0:
-            print(f"  Кадр {frame_count}: Робот ID={robot_id}, позиция: ({robot_real_x:.1f}, {robot_real_y:.1f}), препятствий: {len(obstacles)}")
-
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
-
-    return {
-        'processed_frames': processed,
-        'total_frames': total_frames,
-        'fps': fps,
-        'robot_detections': len(_state['robot_trajectory'])
-    }
-
 def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
     cap = cv2.VideoCapture(camera_id)
     if not cap.isOpened():
-        print(f" Не удалось открыть камеру {camera_id}")
+        print(f"Не удалось открыть камеру {camera_id}")
         return
 
-    # Если нет углов, нужно их выбрать (на первом кадре с камеры)
     if _state['corners'] is None:
-        print("\n Не заданы углы поля!")
+        print("\nНе заданы углы поля!")
         ret, first_frame = cap.read()
         if ret:
             _state['corners'] = set_corners_manually(first_frame)
             _state['H'], _state['H_inv'] = compute_homography(_state['corners'])
             save_corners("field_corners_camera.json")
-        else:
-            print(" Не удалось получить кадр для калибровки")
-            cap.release()
-            return
+        cap.release()
+        return
 
-    # Создаём окно
     cv2.namedWindow("Camera Feed", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Camera Feed", 800, 800)
 
-    # Переменные как в process_video
     user_point = None
     user_point_real = None
     current_robot_pos = None
@@ -483,13 +307,9 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
             user_point = (x, y)
             real_x, real_y = transform_coordinates(x, y)
             user_point_real = (real_x, real_y)
-            print(f" Точка: экран ({x}, {y}) → поле ({real_x:.1f}, {real_y:.1f}) см")
             planner = None
 
     cv2.setMouseCallback("Camera Feed", mouse_callback)
-
-    print("\n Обработка видеопотока (аналогично process_video)...")
-    print("   Управление: Левый клик - цель, Пробел - пауза, 'q' - выход\n")
 
     frame_count = 0
     paused = False
@@ -503,23 +323,18 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
     while True:
         if not paused:
             ret, frame = cap.read()
-            if not ret:
-                print(" Потерян кадр с камеры")
-                break
             frame_count += 1
 
-            # === ТА ЖЕ ЛОГИКА, ЧТО И В process_video ===
-
-            # Выравниваем кадр
             rectified = cv2.warpPerspective(frame, _state['H'], _state['output_size'])
             rectified = draw_coordinate_axes(rectified, margin=20, axis_length=60)
 
             if _state['edge_limit_cm'] > 0:
                 rectified = draw_edge_limit(rectified)
 
-            # Детекция робота (на исходном кадре)
             found, robot_id, center_pixel, center_real, marker_corners = detect_robot(frame)
 
+            robot_real_x = 0.0
+            robot_real_y = 0.0
             if found:
                 robot_real_x, robot_real_y = transform_coordinates(center_pixel[0], center_pixel[1])
                 current_robot_pos = (robot_real_x, robot_real_y)
@@ -531,13 +346,11 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
                     'y_real': robot_real_y
                 })
 
-            # Детекция препятствий
             if found:
                 obstacles = detect_obstacles(rectified, robot_center=center_pixel)
             else:
                 obstacles = detect_obstacles(rectified, robot_center=None)
 
-            # Планировщик
             if planner is None:
                 planner = create_planner(
                     field_width=_state['field_width'],
@@ -551,26 +364,22 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
             update_obstacles(planner, obstacles)
             rectified = draw_planning_contours(planner, rectified)
 
-            # Маршрут
             if user_point_real is not None and found and current_robot_pos is not None:
                 path = find_path(planner, current_robot_pos, user_point_real)
                 if path:
                     rectified = draw_path_on_frame(planner, rectified, path, (0, 255, 255))
 
-            # Отрисовка робота
-            if found and _state['show_robot_zone']:
+            if found:
                 cx = int(center_pixel[0])
                 cy = int(center_pixel[1])
                 robot_radius_px = int(_state['robot_radius'] / _state['field_width'] * _state['output_size'][0])
                 cv2.circle(rectified, (cx, cy), robot_radius_px, (100, 100, 100), 1)
-                rectified = draw_axes_2d(rectified, marker_corners, robot_id, axis_length=50)
+                rectified = draw_axes_2d(rectified, marker_corners, axis_length=50)
 
-            # Точка цели
             if user_point is not None:
                 cv2.circle(rectified, user_point, 8, (255, 0, 255), -1)
                 cv2.circle(rectified, user_point, 12, (255, 0, 255), 2)
 
-            # Информация
             info_y = 25
             cv2.putText(rectified, f"Obstacles: {len(obstacles)}", (10, info_y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
@@ -585,7 +394,6 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
                 cv2.putText(rectified, f"Target: ({user_point_real[0]:.1f}, {user_point_real[1]:.1f})",
                             (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
-            # Отображение
             if rectified.shape[1] > 800 or rectified.shape[0] > 800:
                 scale = min(800 / rectified.shape[1], 800 / rectified.shape[0])
                 new_w = int(rectified.shape[1] * scale)
@@ -596,13 +404,9 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
 
             cv2.imshow("Camera Feed", display)
 
-        # Управление
         key = cv2.waitKey(1 if not paused else 0) & 0xFF
         if key == ord('q'):
             break
-        elif key == ord(' '):
-            paused = not paused
-            print(" Пауза" if paused else " Продолжение")
 
         if single_frame and frame_count >= 1:
             break
