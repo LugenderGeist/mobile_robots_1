@@ -45,7 +45,6 @@ CORNERS_FILE = "field_corners.json"
 OUTPUT_DIR = "output"
 # =================================
 
-
 def init_video_processor():
     vp.set_field_dimensions(FIELD_WIDTH, FIELD_HEIGHT)
     vp.set_obstacle_params(EDGE_MARGIN, OBSTACLE_MIN_AREA, OBSTACLE_MAX_AREA, OBSTACLE_THRESHOLD_V)
@@ -100,12 +99,7 @@ def mode_camera():
     print("   Управление: Левый клик - цель, Пробел - пауза, 'q' - выход\n")
     vp.process_camera_feed(camera_id=1)
 
-
 def mode_robot():
-    """Режим управления роботом с камерой (обратная связь по видео)"""
-    print("\n" + "=" * 50)
-    print("РЕЖИМ: УПРАВЛЕНИЕ РОБОТОМ ПО ВИДЕО")
-    print("=" * 50)
 
     # Проверяем подключение к роботу
     if not connect_to_robotino():
@@ -140,9 +134,6 @@ def mode_robot():
     cv2.resizeWindow("Robot Control", 800, 800)
     cv2.setMouseCallback("Robot Control", mouse_callback)
 
-    print("\nИНСТРУКЦИЯ:")
-    print("   1. Нажмите на целевую точку на поле")
-    print("   2. Робот начнёт движение к цели (обратная связь по видео)")
     print("   3. 's' - остановка, 'q' - выход\n")
 
     from planners.greedy_planner import (
@@ -221,13 +212,12 @@ def mode_robot():
             path = find_path(planner, current_robot_pos, target_point)
 
             if path:
-                print(f"Путь найден! Всего {len(path)} точек")
                 rectified = draw_path_on_frame(planner, rectified, path, (0, 255, 255))
                 moving = True
             else:
                 print("Путь не найден!")
 
-        # УПРАВЛЕНИЕ РОБОТОМ (обратная связь по видео)
+        # УПРАВЛЕНИЕ РОБОТОМ
         if moving and planner and planner.get('path') and current_robot_pos is not None:
             # Используем позицию из видео
             robot_x_cm, robot_y_cm = current_robot_pos
@@ -242,7 +232,7 @@ def mode_robot():
                 goal_tolerance=GOAL_TOLERANCE
             )
 
-            # Отправляем роботу (Y инвертируем, если нужно)
+            # Отправляем скорости
             send_velocity(vx, vy, 0.0)
 
             # Проверка достижения цели
@@ -253,7 +243,7 @@ def mode_robot():
 
             # Выводим отладку раз в 30 кадров
             if frame_count % 30 == 0:
-                print(f"  🏃 Скорости: vx={vx:.3f}, vy={vy:.3f}, до цели: {dist_to_goal:.1f} см")
+                print(f" Скорости: vx={vx:.3f}, vy={vy:.3f}, до цели: {dist_to_goal:.1f} см")
 
             if dist_to_goal < GOAL_TOLERANCE:
                 stop_robot()
@@ -296,9 +286,6 @@ def mode_robot():
 
 
 def main():
-    print("=" * 50)
-    print("ВЫБЕРИТЕ РЕЖИМ")
-    print("=" * 50)
     print("1. Обработка видеофайла")
     print("2. Реальная камера")
     print("3. Управление роботом")

@@ -95,11 +95,11 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
     goal_grid = world_to_grid(planner, goal[0], goal[1])
 
     if not is_cell_safe(planner, start_grid[0], start_grid[1]):
-        print(" Стартовая позиция небезопасна")
+        print(" Стартовая точка небезопасна")
         return []
 
     if not is_cell_safe(planner, goal_grid[0], goal_grid[1]):
-        print(" Целевая позиция небезопасна")
+        print(" Целевая точка небезопасна")
         return []
 
     moves = [(-1, -1), (-1, 0), (-1, 1),
@@ -132,7 +132,7 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
                     best_neighbor = (nx, ny)
 
         if best_neighbor is None:
-            print(" Тупик, путь не найден")
+            print(" Тупик")
             return []
 
         parent[best_neighbor] = current
@@ -186,7 +186,7 @@ def get_velocities(planner: dict, current_x: float, current_y: float,
     print(f" error=({error_x:.1f}, {error_y:.1f}), dist={error_distance:.1f}")
 
     if error_distance < goal_tolerance:
-        print("  ✅ Цель достигнута")
+        print(" Цель достигнута")
         return 0.0, 0.0
 
     max_speed_cm = max_speed * 100.0
@@ -222,7 +222,6 @@ def draw_planning_contours(planner: dict, frame: np.ndarray) -> np.ndarray:
             pixel_contour = np.array(pixel_contour, dtype=np.int32)
             cv2.polylines(frame, [pixel_contour], True, (0, 255, 255), 2)
     return frame
-
 
 def draw_path_on_frame(planner: dict, frame: np.ndarray, path: List[Tuple[float, float]],
                        color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
