@@ -21,7 +21,7 @@ def send_velocity(vx: float, vy: float, omega: float = 0.0) -> bool:
     url = f"{BASE_URL}/data/omnidrive"
     data = [vx, vy, omega]
 
-    response = requests.post(url, json=data, timeout=0.1)
+    response = requests.post(url, json=data, timeout=0.5)
     if response.status_code == 200:
         return True
     else:

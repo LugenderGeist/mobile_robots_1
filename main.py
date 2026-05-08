@@ -235,8 +235,11 @@ def mode_robot():
                         (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
         cv2.imshow("Robot Control", rectified)
-    cap.release()
-    cv2.destroyAllWindows()
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            stop_robot()
+            break
 
 def main():
     print("1. Реальная камера")

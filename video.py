@@ -404,7 +404,7 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
 
             cv2.imshow("Camera Feed", display)
 
-        key = cv2.waitKey(1 if not paused else 0) & 0xFF
+        key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
 
