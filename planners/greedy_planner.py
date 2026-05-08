@@ -153,7 +153,7 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
     return []
 
 def get_velocities(planner: dict, current_x: float, current_y: float,
-                   max_speed: float = 0.5, smoothing: float = 10.0,
+                   max_speed: float = 0.5,
                    kp: float = 0.8, acceptable_error: float = 5.0) -> Tuple[float, float]:
     path = planner['path']
     if not path or len(path) < 2:

@@ -16,7 +16,7 @@ _state = {
     'edge_margin': 20,
     'obstacle_min_area': 500,
     'obstacle_max_area': 5000,
-    'obstacle_threshold_v': 100,
+    'threshold': 100,
     'robot_radius': 15.0,
     'obstacle_safety_margin': 5.0,
     'planning_step': 2.0,
@@ -30,11 +30,11 @@ def set_field_dimensions(width: float, height: float):
     _state['field_height'] = height
 
 def set_obstacle_params(edge_margin: int = 20, min_area: int = 500,
-                        max_area: int = 5000, threshold_v: int = 100):
+                        max_area: int = 5000, threshold: int = 100):
     _state['edge_margin'] = edge_margin
     _state['obstacle_min_area'] = min_area
     _state['obstacle_max_area'] = max_area
-    _state['obstacle_threshold_v'] = threshold_v
+    _state['threshold'] = threshold
 
 def set_robot_params(robot_radius: float = 15.0, obstacle_safety_margin: float = 5.0,
                      planning_step: float = 2.0, edge_limit_cm: float = 15.0):
@@ -127,12 +127,12 @@ def detect_obstacles(rectified_frame: np.ndarray, robot_center: tuple = None) ->
     edge_margin = _state['edge_margin']
     min_area = _state['obstacle_min_area']
     max_area = _state['obstacle_max_area']
-    threshold_v = _state['obstacle_threshold_v']
+    threshold = _state['threshold']
     output_size = _state['output_size']
     field_width = _state['field_width']
 
     gray = cv2.cvtColor(rectified_frame, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(gray, threshold_v, 255, cv2.THRESH_BINARY_INV)
+    _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY_INV)
 
     kernel = np.ones((5, 5), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -289,7 +289,7 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
         if ret:
             _state['corners'] = set_corners_manually(first_frame)
             _state['H'], _state['H_inv'] = compute_homography(_state['corners'])
-            save_corners("field_corners_camera.json")
+            save_corners("field_corners.json")
         cap.release()
         return
 

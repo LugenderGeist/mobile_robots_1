@@ -12,7 +12,7 @@ FIELD_HEIGHT = 220.0
 EDGE_MARGIN = 5
 OBSTACLE_MIN_AREA = 800
 OBSTACLE_MAX_AREA = 500000
-OBSTACLE_THRESHOLD_V = 100
+THRESHOLD = 145
 ROBOT_RADIUS = 30.0
 OBSTACLE_SAFETY_MARGIN = 0.0
 PLANNING_STEP = 2.0
@@ -26,14 +26,13 @@ ANGLE_KP = 0.5
 ACC_ANGLE_ERROR = 10.0
 REFERENCE_ANGLE = -90.0
 
-SMOOTHING = 15.0
 EDGE_LIMIT_CM = 15.0
 
 CORNERS_FILE = "field_corners.json"
 
 def init_video_processor():
     vp.set_field_dimensions(FIELD_WIDTH, FIELD_HEIGHT)
-    vp.set_obstacle_params(EDGE_MARGIN, OBSTACLE_MIN_AREA, OBSTACLE_MAX_AREA, OBSTACLE_THRESHOLD_V)
+    vp.set_obstacle_params(EDGE_MARGIN, OBSTACLE_MIN_AREA, OBSTACLE_MAX_AREA, THRESHOLD)
     vp.set_robot_params(ROBOT_RADIUS, OBSTACLE_SAFETY_MARGIN, PLANNING_STEP, EDGE_LIMIT_CM)
 
     if os.path.exists(CORNERS_FILE):
@@ -209,7 +208,6 @@ def mode_robot():
                 planner,
                 robot_x_cm, robot_y_cm,
                 max_speed=MAX_SPEED,
-                smoothing=SMOOTHING,
                 kp=SPEED_KP,
                 acceptable_error=ACC_SPEED_ERROR
             )
@@ -237,16 +235,6 @@ def mode_robot():
                         (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
         cv2.imshow("Robot Control", rectified)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            stop_robot()
-            break
-        elif key == ord('s'):
-            stop_robot()
-            moving = False
-            rotating = False
-            pending_target = None
     cap.release()
     cv2.destroyAllWindows()
 
