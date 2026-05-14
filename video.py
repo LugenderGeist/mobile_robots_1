@@ -11,7 +11,7 @@ _state = {
     'H_inv': None,
     'output_size': (720, 720),
     'aruco_dict': aruco.getPredefinedDictionary(aruco.DICT_6X6_250),
-    'aruco_params': aruco.DetectorParameters,
+    'aruco_params': aruco.DetectorParameters(),
     'robot_trajectory': [],
     'edge_margin': 20,
     'obstacle_min_area': 500,
@@ -108,8 +108,10 @@ def transform_coordinates(x_pixel: float, y_pixel: float) -> tuple:
 # ========== ДЕТЕКЦИЯ ==========
 def detect_robot(frame: np.ndarray):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    corners, ids, rejected = cv2.aruco.detectMarkers(gray, _state['aruco_dict'],
-                                                      parameters=_state['aruco_params'])
+
+    detector = cv2.aruco.ArucoDetector(_state['aruco_dict'], _state['aruco_params'])
+    corners, ids, rejected = detector.detectMarkers(gray)
+
     if ids is not None and len(ids) > 0:
         marker_id = ids[0][0]
         marker_corners = corners[0][0]
