@@ -24,29 +24,42 @@ def create_planner(field_width: float, field_height: float, step: float = 2.0,
     }
     return planner
 
+
 def update_obstacles(planner: dict, obstacles: List[dict]):
     planner['obstacles'] = obstacles
     planner['obstacle_map'].fill(0)
 
+    step = planner['step']
+    grid_width = planner['grid_width']
+    grid_height = planner['grid_height']
+    field_width = planner['field_width']
+    output_size = (planner['grid_width'] * step, planner['grid_height'] * step)
+
     for obs in obstacles:
-        center_x, center_y = obs['center_real']
-        total_radius = obs['radius_cm'] + planner['robot_radius'] + planner['obstacle_safety']
+        if 'expanded_contour' in obs:
+            # Используем уже расширенный контур из video.py
+            expanded_contour_pixel = obs['expanded_contour']
 
-        step = planner['step']
-        grid_width = planner['grid_width']
-        grid_height = planner['grid_height']
+            # Преобразуем в реальные координаты
+            contour_real = []
+            for point in expanded_contour_pixel:
+                px, py = point[0]
+                real_x = px * (field_width / output_size[0])
+                real_y = (output_size[1] - py) * (planner['field_height'] / output_size[1])
+                contour_real.append([real_x, real_y])
 
-        cell_x = int(center_x / step)
-        cell_y = int(center_y / step)
-        cell_radius = int(total_radius / step) + 1
+            # Закрашиваем клетки внутри контура
+            if len(contour_real) >= 3:
+                grid_points = []
+                for point in contour_real:
+                    gx = int(point[0] / step)
+                    gy = int(point[1] / step)
+                    if 0 <= gx < grid_width and 0 <= gy < grid_height:
+                        grid_points.append([gx, gy])
 
-        for dx in range(-cell_radius, cell_radius + 1):
-            for dy in range(-cell_radius, cell_radius + 1):
-                grid_x = cell_x + dx
-                grid_y = cell_y + dy
-                if (0 <= grid_x < grid_width and 0 <= grid_y < grid_height):
-                    if dx * dx + dy * dy <= cell_radius * cell_radius:
-                        planner['obstacle_map'][grid_y, grid_x] = 1
+                if len(grid_points) >= 3:
+                    grid_points = np.array(grid_points, dtype=np.int32)
+                    cv2.fillPoly(planner['obstacle_map'], [grid_points], 1)
 
 
 def is_cell_safe(planner: dict, grid_x: int, grid_y: int) -> bool:
@@ -193,31 +206,34 @@ def get_velocities(planner: dict, current_x: float, current_y: float,
 
     return vx, -vy
 
+
 def draw_planning_contours(planner: dict, frame: np.ndarray) -> np.ndarray:
     h, w = frame.shape[:2]
-    step = planner['step']
     field_width = planner['field_width']
     field_height = planner['field_height']
+    output_size = (w, h)
 
-    obstacle_map_uint8 = (planner['obstacle_map'] * 255).astype(np.uint8)
-    contours, _ = cv2.findContours(obstacle_map_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Рисуем расширенные контуры из каждого препятствия
+    for obs in planner['obstacles']:
+        if 'expanded_contour' in obs:
+            expanded_contour = obs['expanded_contour']
 
-    for contour in contours:
-        if len(contour) < 4:
-            continue
-        pixel_contour = []
-        for point in contour:
-            gx, gy = point[0]
-            x = int(gx * step / field_width * w)
-            y = int(h - (gy * step / field_height * h))
-            pixel_contour.append([x, y])
-        if len(pixel_contour) > 2:
-            pixel_contour = np.array(pixel_contour, dtype=np.int32)
-            cv2.polylines(frame, [pixel_contour], True, (0, 255, 255), 2)
+            # Преобразуем контур в пиксельные координаты для отображения на frame
+            pixel_contour = []
+            for point in expanded_contour:
+                px, py = point[0]
+                # Преобразование из rectified координат в координаты frame
+                # Так как frame уже rectified, координаты совпадают
+                pixel_contour.append([px, py])
+
+            if len(pixel_contour) > 2:
+                pixel_contour = np.array(pixel_contour, dtype=np.int32)
+                cv2.polylines(frame, [pixel_contour], True, (255, 0, 0), 2)
+
     return frame
 
 def draw_path_on_frame(planner: dict, frame: np.ndarray, path: List[Tuple[float, float]],
-                       color: Tuple[int, int, int] = (0, 255, 255)) -> np.ndarray:
+                       color: Tuple[int, int, int] = (255, 0, 255)) -> np.ndarray:
     if not path or len(path) < 2:
         return frame
 
