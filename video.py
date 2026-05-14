@@ -11,7 +11,7 @@ _state = {
     'H_inv': None,
     'output_size': (720, 720),
     'aruco_dict': aruco.getPredefinedDictionary(aruco.DICT_6X6_250),
-    'aruco_params': aruco.DetectorParameters_create(),
+    'aruco_params': aruco.DetectorParameters,
     'robot_trajectory': [],
     'edge_margin': 20,
     'obstacle_min_area': 500,
