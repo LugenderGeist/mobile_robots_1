@@ -12,7 +12,7 @@ FIELD_HEIGHT = 220.0
 EDGE_MARGIN = 5
 OBSTACLE_MIN_AREA = 800
 OBSTACLE_MAX_AREA = 500000
-THRESHOLD = 135
+THRESHOLD = 140
 ROBOT_RADIUS = 30.0
 OBSTACLE_SAFETY_MARGIN = 0.0
 PLANNING_STEP = 2.0
@@ -104,8 +104,9 @@ def mode_robot():
             moving = False
             rotating = False
             pending_target = None
-            planner = None
-            print(f"Новая цель: ({real_x:.1f}, {real_y:.1f}) см")
+            if planner:
+                from planners.greedy_planner import reset_path
+                reset_path(planner)  # Сбрасываем путь при новой цели
 
     cv2.namedWindow("Robot Control", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Robot Control", 800, 800)

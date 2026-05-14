@@ -140,7 +140,7 @@ def detect_obstacles(rectified_frame: np.ndarray, robot_center: tuple = None) ->
     gray = cv2.cvtColor(rectified_frame, cv2.COLOR_BGR2GRAY)
     _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY_INV)
 
-    kernel = np.ones((5, 5), np.uint8)
+    kernel = np.ones((7, 7), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
@@ -158,8 +158,9 @@ def detect_obstacles(rectified_frame: np.ndarray, robot_center: tuple = None) ->
             cv2.circle(mask, (cx, cy), robot_radius_px, 0, -1)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    obstacles = []
-    safety_mask = np.zeros_like(mask)
+
+    # Сначала собираем все расширенные контуры
+    all_expanded_contours = []
 
     for contour in contours:
         area = cv2.contourArea(contour)
@@ -194,26 +195,62 @@ def detect_obstacles(rectified_frame: np.ndarray, robot_center: tuple = None) ->
                 scale = (dist + safety_px) / dist
                 new_x = cx + dx * scale
                 new_y = cy + dy * scale
-                expanded_contour.append([[int(new_x), int(new_y)]])
+                expanded_contour.append([int(new_x), int(new_y)])
             else:
-                expanded_contour.append([[int(px), int(py)]])
+                expanded_contour.append([int(px), int(py)])
 
-        expanded_contour = np.array(expanded_contour, dtype=np.int32)
+        all_expanded_contours.append(np.array(expanded_contour, dtype=np.int32))
 
-        obstacles.append({
-            'center_pixel': (center_x_rect, center_y_rect),
-            'center_real': (real_x, real_y),
-            'area': area,
-            'radius_px': radius_px,
-            'radius_cm': radius_cm,
-            'contour': contour,
-            'expanded_contour': expanded_contour
-        })
+    # Объединяем пересекающиеся контуры
+    if len(all_expanded_contours) > 0:
+        # Создаем маску для объединения
+        merged_mask = np.zeros((output_size[1], output_size[0]), dtype=np.uint8)
 
-        cv2.fillPoly(safety_mask, [expanded_contour], 255)
+        # Рисуем все расширенные контуры на маске
+        for contour in all_expanded_contours:
+            cv2.fillPoly(merged_mask, [contour], 255)
 
-    _state['safety_mask'] = safety_mask
-    return obstacles
+        # Находим объединенные контуры
+        merged_contours, _ = cv2.findContours(merged_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Формируем итоговый список препятствий
+        obstacles = []
+        safety_mask = np.zeros_like(merged_mask)
+
+        for merged_contour in merged_contours:
+            # Вычисляем параметры для объединенного препятствия
+            area = cv2.contourArea(merged_contour)
+            if area < min_area:
+                continue
+
+            center = cv2.moments(merged_contour)
+            if center["m00"] != 0:
+                center_x_rect = center["m10"] / center["m00"]
+                center_y_rect = center["m01"] / center["m00"]
+            else:
+                center_x_rect = 0
+                center_y_rect = 0
+
+            radius_px = int(np.sqrt(area / np.pi))
+            real_x = center_x_rect * (field_width / output_size[0])
+            real_y = (output_size[1] - center_y_rect) * (field_height / output_size[1])
+
+            obstacles.append({
+                'center_pixel': (center_x_rect, center_y_rect),
+                'center_real': (real_x, real_y),
+                'area': area,
+                'radius_px': radius_px,
+                'radius_cm': radius_px * scale_avg,
+                'contour': merged_contour,
+                'expanded_contour': merged_contour
+            })
+
+            cv2.fillPoly(safety_mask, [merged_contour], 255)
+
+        _state['safety_mask'] = safety_mask
+        return obstacles
+
+    return []
 
 # ========== ОТРИСОВКА ==========
 def draw_axes_2d(frame: np.ndarray, marker_corners: np.ndarray, axis_length: float = 60) -> np.ndarray:
@@ -339,7 +376,9 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
             user_point = (x, y)
             real_x, real_y = transform_coordinates(x, y)
             user_point_real = (real_x, real_y)
-            planner = None
+            if planner:
+                from planners.greedy_planner import reset_path
+                reset_path(planner)  # Сбрасываем путь при новой цели
 
     cv2.setMouseCallback("Camera Feed", mouse_callback)
 
@@ -399,7 +438,7 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
             if user_point_real is not None and found and current_robot_pos is not None:
                 path = find_path(planner, current_robot_pos, user_point_real)
                 if path:
-                    rectified = draw_path_on_frame(planner, rectified, path, (255, 0, 255))
+                    rectified = draw_path_on_frame(planner, rectified, path, (0, 255, 0))
 
             if found:
                 cx = int(center_pixel[0])
@@ -409,8 +448,8 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
                 rectified = draw_axes_2d(rectified, marker_corners, axis_length=50)
 
             if user_point is not None:
-                cv2.circle(rectified, user_point, 8, (255, 0, 255), -1)
-                cv2.circle(rectified, user_point, 12, (255, 0, 255), 2)
+                cv2.circle(rectified, user_point, 8, (0, 255, 0), -1)
+                cv2.circle(rectified, user_point, 12, (0, 255, 0), 2)
 
             info_y = 25
             cv2.putText(rectified, f"Obstacles: {len(obstacles)}", (10, info_y),
