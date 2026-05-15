@@ -251,7 +251,6 @@ def mode_robot():
         if target_point:
             cv2.putText(rectified, f"Target: ({target_point[0]:.1f}, {target_point[1]:.1f})",
                         (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-        info_y += 25
 
         cv2.imshow("Robot Control", rectified)
 

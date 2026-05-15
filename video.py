@@ -195,7 +195,6 @@ def detect_obstacles(rectified_frame: np.ndarray, robot_center: tuple = None) ->
             if dist_to_robot < min_robot_distance_px:
                 continue
 
-        # ========== НАХОДИМ ПРЯМОУГОЛЬНИК (4 УГЛА) ==========
         # Находим минимальный ограничивающий прямоугольник (повернутый)
         rect = cv2.minAreaRect(contour)
         box = cv2.boxPoints(rect)
@@ -528,9 +527,6 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
                 if current_robot_pos:
                     dist = math.hypot(current_robot_pos[0] - user_point_real[0],
                                       current_robot_pos[1] - user_point_real[1])
-                    cv2.putText(rectified, f"Distance: {dist:.1f} cm",
-                                (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-                    info_y += 25
 
             if rectified.shape[1] > 800 or rectified.shape[0] > 800:
                 scale = min(800 / rectified.shape[1], 800 / rectified.shape[0])
