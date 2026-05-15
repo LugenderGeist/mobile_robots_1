@@ -267,7 +267,7 @@ def get_velocities(planner: dict, current_x: float, current_y: float,
             min_dist = dist
             nearest_idx = i
 
-    target_idx = min(nearest_idx + 1, len(path) - 1)
+    target_idx = min(nearest_idx + 5, len(path) - 1)
     target_x, target_y = path[target_idx]
 
     error_x = target_x - current_x
