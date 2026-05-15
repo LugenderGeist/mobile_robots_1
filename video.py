@@ -395,13 +395,12 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
     current_path = None
 
     def mouse_callback(event, x, y, flags, param):
-        nonlocal user_point, user_point_real, planner, current_path, path_printed
+        nonlocal user_point, user_point_real, planner, current_path
         if event == cv2.EVENT_LBUTTONDOWN:
             user_point = (x, y)
             real_x, real_y = transform_coordinates(x, y)
             user_point_real = (real_x, real_y)
-            current_path = None  # Сбрасываем путь при новой цели
-            path_printed = False
+            current_path = None
             if planner:
                 from planners.greedy_planner import reset_path
                 reset_path(planner)
