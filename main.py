@@ -83,8 +83,6 @@ def mode_robot():
         while delta < -180:
             delta += 360
 
-        print(f"current={current_angle:.1f}°, target={REFERENCE_ANGLE:.1f}°, delta={delta:.1f}°")
-
         if abs(delta) < ACC_ANGLE_ERROR:
             return True
 
@@ -109,7 +107,6 @@ def mode_robot():
             current_path = None  # Сбрасываем путь при новой цели
             if planner:
                 reset_path(planner)
-            print(f"\nНовая цель: ({real_x:.1f}, {real_y:.1f})")
 
     cv2.namedWindow("Robot Control", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Robot Control", 800, 800)
@@ -226,7 +223,6 @@ def mode_robot():
             )
             send_velocity(vx, -vy, 0.0)
 
-        # РИСУЕМ ПУТЬ КАЖДЫЙ КАДР
         if current_path is not None and len(current_path) > 1:
             rectified = draw_path_on_frame(planner, rectified, current_path, (0, 255, 0))
 

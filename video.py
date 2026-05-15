@@ -128,7 +128,6 @@ def detect_robot(frame: np.ndarray):
         return True, marker_id, (center_x_rect, center_y_rect), (real_x, real_y), marker_corners
     return False, -1, (0, 0), (0, 0), None
 
-
 def detect_obstacles(rectified_frame: np.ndarray, robot_center: tuple = None) -> list:
     edge_margin = _state['edge_margin']
     min_area = _state['obstacle_min_area']
@@ -361,7 +360,6 @@ def load_corners(corners_file: str) -> bool:
             _state['field_width'] = data.get('field_width', _state['field_width'])
             _state['field_height'] = data.get('field_height', _state['field_height'])
             _state['H'], _state['H_inv'] = compute_homography(_state['corners'])
-            print(f"Углы загружены из {corners_file}")
             return True
     except Exception as e:
         print(f"Не удалось загрузить углы: {e}")
@@ -370,7 +368,6 @@ def load_corners(corners_file: str) -> bool:
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 def reset_trajectory():
     _state['robot_trajectory'] = []
-
 
 def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
     cap = cv2.VideoCapture(camera_id)
@@ -395,8 +392,7 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
     user_point_real = None
     current_robot_pos = None
     planner = None
-    current_path = None  # Сохраняем текущий путь
-    path_printed = False  # Для отладки
+    current_path = None
 
     def mouse_callback(event, x, y, flags, param):
         nonlocal user_point, user_point_real, planner, current_path, path_printed
@@ -479,7 +475,6 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
                 # Если робот достиг цели
                 if dist_to_goal < 5.0:
                     if user_point_real is not None:
-                        print(f"Цель достигнута! Расстояние: {dist_to_goal:.1f} см")
                         user_point_real = None
                         user_point = None
                         current_path = None
@@ -489,12 +484,7 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
                 else:
                     # Если нет пути, строим новый
                     if current_path is None or len(current_path) == 0:
-                        print("Строим новый путь...")
                         current_path = find_path(planner, current_robot_pos, user_point_real)
-                        if current_path:
-                            print(f"Путь построен! Количество точек: {len(current_path)}")
-                        else:
-                            print("Не удалось построить путь!")
 
             if current_path is not None and len(current_path) > 1:
                 rectified = draw_path_on_frame(planner, rectified, current_path, (0, 255, 0))
@@ -541,9 +531,6 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
-        elif key == ord('p'):
-            paused = not paused
-            print("Пауза" if paused else "Продолжение")
 
         if single_frame and frame_count >= 1:
             break

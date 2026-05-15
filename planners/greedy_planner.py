@@ -3,7 +3,6 @@ import numpy as np
 from typing import List, Tuple
 import math
 
-
 def create_planner(field_width: float, field_height: float, step: float,
                    robot_radius: float, obstacle_safety: float,
                    edge_limit_cm: float) -> dict:
@@ -26,7 +25,6 @@ def create_planner(field_width: float, field_height: float, step: float,
         'current_goal': None
     }
     return planner
-
 
 def update_obstacles(planner: dict, obstacles: List[dict]):
     planner['obstacles'] = obstacles
@@ -70,12 +68,10 @@ def update_obstacles(planner: dict, obstacles: List[dict]):
                     grid_points = np.array(grid_points, dtype=np.int32)
                     cv2.fillPoly(planner['obstacle_map'], [grid_points], 1)
 
-
 def reset_path(planner: dict):
     planner['path'] = []
     planner['path_locked'] = False
     planner['current_goal'] = None
-
 
 def is_cell_safe(planner: dict, grid_x: int, grid_y: int) -> bool:
     if not (0 <= grid_x < planner['grid_width'] and 0 <= grid_y < planner['grid_height']):
@@ -95,12 +91,10 @@ def is_cell_safe(planner: dict, grid_x: int, grid_y: int) -> bool:
 
     return True
 
-
 def heuristic(x: int, y: int, goal_x: int, goal_y: int, step: float) -> float:
     dx = (x - goal_x) * step
     dy = (y - goal_y) * step
     return math.hypot(dx, dy)
-
 
 def world_to_grid(planner: dict, x: float, y: float) -> Tuple[int, int]:
     step = planner['step']
@@ -110,14 +104,11 @@ def world_to_grid(planner: dict, x: float, y: float) -> Tuple[int, int]:
     grid_y = max(0, min(grid_y, planner['grid_height'] - 1))
     return grid_x, grid_y
 
-
 def grid_to_world(planner: dict, grid_x: int, grid_y: int) -> Tuple[float, float]:
     step = planner['step']
     return (grid_x + 0.5) * step, (grid_y + 0.5) * step
 
-
 def interpolate_path(path: List[Tuple[float, float]], step: float) -> List[Tuple[float, float]]:
-    """Добавляет промежуточные точки на прямых участках пути"""
     if len(path) < 2:
         return path
 
@@ -144,9 +135,7 @@ def interpolate_path(path: List[Tuple[float, float]], step: float) -> List[Tuple
     interpolated.append(path[-1])
     return interpolated
 
-
 def smooth_path(path: List[Tuple[float, float]], factor: float = 0.3) -> List[Tuple[float, float]]:
-    """Сглаживает углы пути"""
     if len(path) < 3:
         return path
 
@@ -174,11 +163,8 @@ def smooth_path(path: List[Tuple[float, float]], factor: float = 0.3) -> List[Tu
 
 
 def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, float]) -> List[Tuple[float, float]]:
-    # Если путь уже заблокирован и цель та же, возвращаем существующий путь
     if planner.get('path_locked', False) and planner.get('current_goal') == goal:
         return planner['path']
-
-    # Новая цель - сбрасываем блокировку
     planner['path_locked'] = False
 
     start_grid = world_to_grid(planner, start[0], start[1])
@@ -230,7 +216,6 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
         current = best_neighbor
 
     if current == (goal_grid[0], goal_grid[1]):
-        # Восстанавливаем путь
         path = []
         curr = current
         while curr in parent:
@@ -239,7 +224,6 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
         path.append(grid_to_world(planner, start_grid[0], start_grid[1]))
         path.reverse()
 
-        # ========== ИНТЕРПОЛЯЦИЯ И СГЛАЖИВАНИЕ ==========
         path = interpolate_path(path, planner['step'])
         path = smooth_path(path, factor=0.3)
 
@@ -250,7 +234,6 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
 
     print(" Путь не найден")
     return []
-
 
 def get_velocities(planner: dict, current_x: float, current_y: float,
                    max_speed: float, kp: float, acc_speed_error: float) -> Tuple[float, float]:
@@ -292,7 +275,6 @@ def get_velocities(planner: dict, current_x: float, current_y: float,
 
     return vx, -vy
 
-
 def draw_planning_contours(planner: dict, frame: np.ndarray) -> np.ndarray:
     for obs in planner['obstacles']:
         if 'expanded_contour' in obs:
@@ -300,7 +282,6 @@ def draw_planning_contours(planner: dict, frame: np.ndarray) -> np.ndarray:
             if len(expanded_contour) > 2:
                 cv2.polylines(frame, [expanded_contour], True, (255, 0, 0), 2)
     return frame
-
 
 def draw_path_on_frame(planner: dict, frame: np.ndarray, path: List[Tuple[float, float]],
                        color: Tuple[int, int, int] = (255, 0, 255)) -> np.ndarray:
