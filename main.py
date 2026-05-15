@@ -13,17 +13,18 @@ EDGE_MARGIN = 5
 OBSTACLE_MIN_AREA = 800
 OBSTACLE_MAX_AREA = 500000
 THRESHOLD = 140
-ROBOT_RADIUS = 30.0
-OBSTACLE_SAFETY_MARGIN = 0.0
-PLANNING_STEP = 2.0
+ROBOT_SAFETY_RADIUS = 33.0
+ROBOT_RADIUS = 27.0
+OBSTACLE_SAFETY_MARGIN = 14.0
+PLANNING_STEP = 1.0
 
 # УПРАВЛЕНИЕ
-MAX_SPEED = 0.25
-SPEED_KP = 1.2
+MAX_SPEED = 0.3
+SPEED_KP = 4
 ACC_SPEED_ERROR = 5.0
 MAX_OMEGA = 0.5
 ANGLE_KP = 0.5
-ACC_ANGLE_ERROR = 10.0
+ACC_ANGLE_ERROR = 6.0
 REFERENCE_ANGLE = -90.0
 
 EDGE_LIMIT_CM = 15.0
@@ -33,7 +34,7 @@ CORNERS_FILE = "field_corners.json"
 def init_video_processor():
     vp.set_field_dimensions(FIELD_WIDTH, FIELD_HEIGHT)
     vp.set_obstacle_params(EDGE_MARGIN, OBSTACLE_MIN_AREA, OBSTACLE_MAX_AREA, THRESHOLD)
-    vp.set_robot_params(ROBOT_RADIUS, OBSTACLE_SAFETY_MARGIN, PLANNING_STEP, EDGE_LIMIT_CM)
+    vp.set_robot_params(ROBOT_RADIUS, ROBOT_SAFETY_RADIUS, OBSTACLE_SAFETY_MARGIN, PLANNING_STEP, EDGE_LIMIT_CM)
 
     if os.path.exists(CORNERS_FILE):
         vp.load_corners(CORNERS_FILE)
@@ -60,10 +61,11 @@ def mode_robot():
     rotating = False
     pending_target = None
     current_robot_pos = None
+    current_path = None  # Сохраняем текущий путь
 
     from planners.greedy_planner import (
         create_planner, update_obstacles, draw_planning_contours,
-        find_path, draw_path_on_frame, get_velocities
+        find_path, draw_path_on_frame, get_velocities, reset_path
     )
 
     def get_robot_angle(marker_corners) -> float:
@@ -97,16 +99,17 @@ def mode_robot():
         return False
 
     def mouse_callback(event, x, y, _flags, _param):
-        nonlocal target_point, planner, moving, rotating, pending_target
+        nonlocal target_point, planner, moving, rotating, pending_target, current_path
         if event == cv2.EVENT_LBUTTONDOWN:
             real_x, real_y = vp.transform_coordinates(x, y)
             target_point = (real_x, real_y)
             moving = False
             rotating = False
             pending_target = None
+            current_path = None  # Сбрасываем путь при новой цели
             if planner:
-                from planners.greedy_planner import reset_path
-                reset_path(planner)  # Сбрасываем путь при новой цели
+                reset_path(planner)
+            print(f"\nНовая цель: ({real_x:.1f}, {real_y:.1f})")
 
     cv2.namedWindow("Robot Control", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Robot Control", 800, 800)
@@ -116,6 +119,8 @@ def mode_robot():
 
     while True:
         ret, frame = cap.read()
+        if not ret:
+            break
         frame_count += 1
 
         h_matrix = vp._state['H']
@@ -139,6 +144,7 @@ def mode_robot():
                 moving = False
                 rotating = False
                 pending_target = None
+                current_path = None
 
         if found:
             obstacles = vp.detect_obstacles(rectified, robot_center=center_pixel)
@@ -158,51 +164,57 @@ def mode_robot():
         update_obstacles(planner, obstacles)
         rectified = draw_planning_contours(planner, rectified)
 
-        if found:
-            rectified = vp.draw_axes_2d(rectified, corners, axis_length=50)
-            robot_radius_px = int(ROBOT_RADIUS / FIELD_WIDTH * rectified.shape[1])
-            cv2.circle(rectified, (int(center_pixel[0]), int(center_pixel[1])), robot_radius_px, (100, 100, 100), 1)
+        # Логика построения и обновления пути
+        if target_point is not None and current_robot_pos is not None:
+            dist_to_goal = math.hypot(current_robot_pos[0] - target_point[0],
+                                      current_robot_pos[1] - target_point[1])
 
-        if target_point is not None and current_robot_pos is not None and not moving and not rotating:
-            current_angle = get_robot_angle(corners)
-
-            delta = abs(REFERENCE_ANGLE - current_angle)
-            while delta > 180:
-                delta = 360 - delta
-
-            if delta > ACC_ANGLE_ERROR:
-                rotating = True
-                pending_target = target_point
+            if dist_to_goal < ACC_SPEED_ERROR:
+                target_point = None
+                current_path = None
+                moving = False
+                rotating = False
+                if planner:
+                    reset_path(planner)
             else:
-                path = find_path(planner, current_robot_pos, target_point)
-                if path:
-                    rectified = draw_path_on_frame(planner, rectified, path, (0, 255, 255))
-                    moving = True
+                if current_path is None and not moving and not rotating:
+                    current_angle = get_robot_angle(corners)
+                    delta = abs(REFERENCE_ANGLE - current_angle)
+                    while delta > 180:
+                        delta = 360 - delta
 
+                    if delta > ACC_ANGLE_ERROR:
+                        rotating = True
+                        pending_target = target_point
+                    else:
+                        current_path = find_path(planner, current_robot_pos, target_point)
+                        if current_path:
+                            moving = True
+                        else:
+                            print("Не удалось построить путь!")
+
+        # Обработка поворота
         if rotating and current_robot_pos is not None:
             current_angle = get_robot_angle(corners)
             if rotate_to_reference_angle(current_angle):
-                path = find_path(planner, current_robot_pos, pending_target)
-                if path:
-                    print("Путь найден!")
-                    rectified = draw_path_on_frame(planner, rectified, path, (0, 255, 255))
+                current_path = find_path(planner, current_robot_pos, pending_target)
+                if current_path:
                     moving = True
-
                 rotating = False
                 pending_target = None
             continue
 
-        if moving and planner and planner.get('path') and current_robot_pos is not None:
+        # Движение по пути
+        if moving and planner and current_path and current_robot_pos is not None:
             robot_x_cm, robot_y_cm = current_robot_pos
 
-            final_goal = planner['path'][-1]
+            final_goal = current_path[-1]
             dist_to_final = math.hypot(final_goal[0] - robot_x_cm, final_goal[1] - robot_y_cm)
 
             if dist_to_final < ACC_SPEED_ERROR:
                 stop_robot()
                 moving = False
-                planner = None
-                target_point = None
+                current_path = None
                 continue
 
             vx, vy = get_velocities(
@@ -210,18 +222,23 @@ def mode_robot():
                 robot_x_cm, robot_y_cm,
                 max_speed=MAX_SPEED,
                 kp=SPEED_KP,
-                acceptable_error=ACC_SPEED_ERROR
+                acc_speed_error=ACC_SPEED_ERROR
             )
             send_velocity(vx, -vy, 0.0)
 
-            if frame_count % 30 == 0:
-                print(f"vx={vx:.3f}, vy={vy:.3f}, до цели={dist_to_final:.1f} см")
+        # РИСУЕМ ПУТЬ КАЖДЫЙ КАДР
+        if current_path is not None and len(current_path) > 1:
+            rectified = draw_path_on_frame(planner, rectified, current_path, (0, 255, 0))
+
+        if found:
+            rectified = vp.draw_axes_2d(rectified, corners, axis_length=50)
+            robot_radius_px = int(ROBOT_RADIUS / FIELD_WIDTH * rectified.shape[1])
+            cv2.circle(rectified, (int(center_pixel[0]), int(center_pixel[1])), robot_radius_px, (100, 100, 100), 1)
 
         if target_point is not None:
             tx = int(target_point[0] / FIELD_WIDTH * rectified.shape[1])
             ty = int(rectified.shape[0] - (target_point[1] / FIELD_HEIGHT * rectified.shape[0]))
-            cv2.circle(rectified, (tx, ty), 8, (255, 0, 255), -1)
-            cv2.circle(rectified, (tx, ty), 12, (255, 0, 255), 2)
+            cv2.circle(rectified, (tx, ty), 8, (0, 255, 0), -1)
 
         info_y = 25
         cv2.putText(rectified, f"Obstacles: {len(obstacles)}", (10, info_y),
@@ -234,6 +251,7 @@ def mode_robot():
         if target_point:
             cv2.putText(rectified, f"Target: ({target_point[0]:.1f}, {target_point[1]:.1f})",
                         (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        info_y += 25
 
         cv2.imshow("Robot Control", rectified)
 

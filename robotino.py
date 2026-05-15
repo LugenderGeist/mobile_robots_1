@@ -28,10 +28,8 @@ def send_velocity(vx: float, vy: float, omega: float = 0.0) -> bool:
         if response.status_code == 200:
             return True
         else:
-            print(f"Ошибка отправки скорости: статус {response.status_code}")
             return False
     except Exception as e:
-        print(f"Ошибка отправки скорости: {e}")
         return False
 
 def stop_robot() -> bool:

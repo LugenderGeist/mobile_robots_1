@@ -41,7 +41,6 @@ def update_obstacles(planner: dict, obstacles: List[dict]):
     field_width = planner['field_width']
     field_height = planner['field_height']
 
-    # Размер rectified изображения (из video.py _state['output_size'] = (720, 720))
     rectified_width = 720
     rectified_height = 720
 
@@ -52,18 +51,15 @@ def update_obstacles(planner: dict, obstacles: List[dict]):
             # Преобразуем пиксельные координаты rectified в реальные см
             contour_real = []
             for point in expanded_contour:
-                # expanded_contour может быть в формате (N, 1, 2) или (N, 2)
                 if len(point) == 2:
                     px, py = point
                 else:
                     px, py = point[0]
 
-                # Пиксель -> реальные см
                 real_x = px * (field_width / rectified_width)
                 real_y = (rectified_height - py) * (field_height / rectified_height)
                 contour_real.append([real_x, real_y])
 
-            # Закрашиваем клетки внутри контура
             if len(contour_real) >= 3:
                 grid_points = []
                 for point in contour_real:
@@ -74,7 +70,15 @@ def update_obstacles(planner: dict, obstacles: List[dict]):
 
                 if len(grid_points) >= 3:
                     grid_points = np.array(grid_points, dtype=np.int32)
-                    cv2.fillPoly(planner['obstacle_map'], [grid_points], 1)
+
+                    # Создаем временную маску
+                    temp_mask = np.zeros_like(planner['obstacle_map'])
+                    # Закрашиваем внутренность контура
+                    cv2.fillPoly(temp_mask, [grid_points], 1)
+                    # Вычитаем сам конур (делаем его свободным)
+                    cv2.polylines(temp_mask, [grid_points], True, 0, 1)
+                    # Объединяем с основной картой
+                    planner['obstacle_map'] = np.maximum(planner['obstacle_map'], temp_mask)
 
 
 def reset_path(planner: dict):
@@ -148,55 +152,135 @@ def find_path(planner: dict, start: Tuple[float, float], goal: Tuple[float, floa
              (0, -1), (0, 1),
              (1, -1), (1, 0), (1, 1)]
 
-    visited = set()
+    # Стоимость движения (диагональные дороже)
+    def get_move_cost(dx, dy):
+        if dx != 0 and dy != 0:
+            return math.sqrt(2) * planner['step']
+        return planner['step']
+
+    # Используем A*
+    import heapq
+
+    INF = float('inf')
+    g_score = {}
     parent = {}
-    current = (start_grid[0], start_grid[1])
-    visited.add(current)
 
-    max_iterations = planner['grid_width'] * planner['grid_height']
-    iterations = 0
+    start_node = (start_grid[0], start_grid[1])
+    g_score[start_node] = 0
 
-    while current != (goal_grid[0], goal_grid[1]) and iterations < max_iterations:
-        iterations += 1
-        x, y = current
+    h = heuristic(start_grid[0], start_grid[1], goal_grid[0], goal_grid[1], planner['step'])
+    pq = [(h, start_grid[0], start_grid[1])]
 
-        best_neighbor = None
-        best_h = float('inf')
+    visited = set()
 
+    while pq:
+        _, x, y = heapq.heappop(pq)
+        current = (x, y)
+
+        if current in visited:
+            continue
+        visited.add(current)
+
+        if current == (goal_grid[0], goal_grid[1]):
+            # Восстанавливаем путь
+            path = []
+            curr = current
+            while curr in parent:
+                path.append(grid_to_world(planner, curr[0], curr[1]))
+                curr = parent[curr]
+            path.append(grid_to_world(planner, start_grid[0], start_grid[1]))
+            path.reverse()
+
+            # ========== ИНТЕРПОЛЯЦИЯ ПУТИ ==========
+            # Добавляем промежуточные точки на прямых участках
+            interpolated_path = []
+
+            # Расстояние между интерполированными точками (меньше шага сетки)
+            interpolation_step = planner['step'] / 2  # 0.5 см между точками
+
+            for i in range(len(path) - 1):
+                x1, y1 = path[i]
+                x2, y2 = path[i + 1]
+
+                # Вычисляем расстояние между точками
+                dist = math.hypot(x2 - x1, y2 - y1)
+
+                if dist < interpolation_step:
+                    # Если расстояние маленькое, просто добавляем первую точку
+                    if i == 0:
+                        interpolated_path.append((x1, y1))
+                else:
+                    # Добавляем первую точку
+                    if i == 0:
+                        interpolated_path.append((x1, y1))
+
+                    # Вычисляем количество промежуточных точек
+                    num_points = int(dist / interpolation_step)
+
+                    # Добавляем промежуточные точки
+                    for j in range(1, num_points + 1):
+                        t = j / (num_points + 1)
+                        ix = x1 + t * (x2 - x1)
+                        iy = y1 + t * (y2 - y1)
+                        interpolated_path.append((ix, iy))
+
+            # Добавляем последнюю точку
+            interpolated_path.append(path[-1])
+
+            # ========== ОПЦИОНАЛЬНО: СГЛАЖИВАНИЕ (не удаляем точки, а только сглаживаем) ==========
+            # Применяем небольшое сглаживание для более плавного движения
+            smoothed_path = [interpolated_path[0]]
+            smoothing_factor = 0.3  # Сила сглаживания
+
+            for i in range(1, len(interpolated_path) - 1):
+                prev = smoothed_path[-1]
+                curr = interpolated_path[i]
+                nxt = interpolated_path[i + 1]
+
+                # Если точки почти на одной прямой, оставляем как есть
+                cross = abs((curr[1] - prev[1]) * (nxt[0] - curr[0]) -
+                            (curr[0] - prev[0]) * (nxt[1] - curr[1]))
+
+                if cross < 0.5:  # Почти прямая линия
+                    smoothed_path.append(curr)
+                else:
+                    # Сглаживаем угол
+                    smooth_x = curr[0] * (1 - smoothing_factor) + (prev[0] + nxt[0]) / 2 * smoothing_factor
+                    smooth_y = curr[1] * (1 - smoothing_factor) + (prev[1] + nxt[1]) / 2 * smoothing_factor
+                    smoothed_path.append((smooth_x, smooth_y))
+
+            smoothed_path.append(interpolated_path[-1])
+
+            planner['path'] = smoothed_path
+            planner['path_locked'] = True
+            planner['current_goal'] = goal
+            return smoothed_path
+
+        # Сортируем соседей
+        neighbors = []
         for dx, dy in moves:
             nx, ny = x + dx, y + dy
-            if (0 <= nx < planner['grid_width'] and 0 <= ny < planner['grid_height'] and
-                    (nx, ny) not in visited and is_cell_safe(planner, nx, ny)):
+            neighbor = (nx, ny)
 
+            if not (0 <= nx < planner['grid_width'] and 0 <= ny < planner['grid_height']):
+                continue
+            if not is_cell_safe(planner, nx, ny):
+                continue
+
+            move_cost = get_move_cost(dx, dy)
+            tentative_g = g_score[current] + move_cost
+
+            if tentative_g < g_score.get(neighbor, INF):
+                parent[neighbor] = current
+                g_score[neighbor] = tentative_g
                 h = heuristic(nx, ny, goal_grid[0], goal_grid[1], planner['step'])
-                if h < best_h:
-                    best_h = h
-                    best_neighbor = (nx, ny)
+                neighbors.append((tentative_g + h, nx, ny))
 
-        if best_neighbor is None:
-            print(" Тупик")
-            return []
-
-        parent[best_neighbor] = current
-        visited.add(best_neighbor)
-        current = best_neighbor
-
-    if current == (goal_grid[0], goal_grid[1]):
-        path = []
-        curr = current
-        while curr in parent:
-            path.append(grid_to_world(planner, curr[0], curr[1]))
-            curr = parent[curr]
-        path.append(grid_to_world(planner, start_grid[0], start_grid[1]))
-        path.reverse()
-        planner['path'] = path
-        planner['path_locked'] = True  # Блокируем путь
-        planner['current_goal'] = goal  # Запоминаем цель
-        return path
+        for priority, nx, ny in neighbors:
+            heapq.heappush(pq, (priority, nx, ny))
 
     print(" Путь не найден")
     return []
-
 
 def get_velocities(planner: dict, current_x: float, current_y: float,
                    max_speed: float, kp: float, acc_speed_error: float) -> Tuple[float, float]:
@@ -213,14 +297,14 @@ def get_velocities(planner: dict, current_x: float, current_y: float,
             min_dist = dist
             nearest_idx = i
 
-    target_idx = min(nearest_idx + 3, len(path) - 1)
+    target_idx = min(nearest_idx + 4, len(path) - 1)
     target_x, target_y = path[target_idx]
 
     error_x = target_x - current_x
     error_y = target_y - current_y
     error_distance = math.hypot(error_x, error_y)
 
-    min_speed_ms = 0.03
+    min_speed_ms = 0.05
 
     max_speed_cm = max_speed * 100.0
     speed_cm = min(kp * error_distance, max_speed_cm)
@@ -240,7 +324,6 @@ def get_velocities(planner: dict, current_x: float, current_y: float,
 
 
 def draw_planning_contours(planner: dict, frame: np.ndarray) -> np.ndarray:
-    # Рисуем только желтые расширенные контуры (без окружностей)
     for obs in planner['obstacles']:
         if 'expanded_contour' in obs:
             expanded_contour = obs['expanded_contour']
