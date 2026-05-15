@@ -1,1 +1,1 @@
-from .greedy_planner import create_planner as greedy_planner
+from .dijkstra_planner import create_planner as dijkstra_planner

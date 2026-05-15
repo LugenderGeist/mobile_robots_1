@@ -63,7 +63,7 @@ def mode_robot():
     current_robot_pos = None
     current_path = None  # Сохраняем текущий путь
 
-    from planners.greedy_planner import (
+    from planners.dijkstra_planner import (
         create_planner, update_obstacles, draw_planning_contours,
         find_path, draw_path_on_frame, get_velocities, reset_path
     )
