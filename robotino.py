@@ -8,7 +8,6 @@ def connect_to_robotino() -> bool:
     try:
         response = requests.get(f"{BASE_URL}/data/odometry", timeout=0.5)
         if response.status_code == 200:
-            print("Успешное соединение с Robotino!")
             return True
         else:
             print(f"Ошибка соединения: статус {response.status_code}")
@@ -19,8 +18,6 @@ def connect_to_robotino() -> bool:
 
 def send_velocity(vx: float, vy: float, omega: float = 0.0) -> bool:
     url = f"{BASE_URL}/data/omnidrive"
-
-    # Преобразуем numpy типы в обычные float
     data = [float(vx), float(vy), float(omega)]
 
     try:
