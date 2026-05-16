@@ -405,7 +405,6 @@ def process_camera_feed(camera_id: int = 0, single_frame: bool = False):
             if planner:
                 from planners.dijkstra_planner import reset_path
                 reset_path(planner)
-            print(f"\nНовая цель: ({real_x:.1f}, {real_y:.1f})")
 
     cv2.setMouseCallback("Camera Feed", mouse_callback)
 
